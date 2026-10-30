@@ -1,6 +1,5 @@
 package com.example.ringtone_goofer
 
-import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -9,6 +8,7 @@ import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import kotlin.coroutines.coroutineContext
 
 data class VoiceClip(val id: String, val name: String)
@@ -73,9 +73,17 @@ class RingtoneApi(private val baseUrl: String = BASE_URL) {
         }
     }
 
-    fun previewUrl(voice: Voice, clip: VoiceClip): Uri =
-        Uri.parse("$baseUrl/voice-preview").buildUpon()
-            .appendQueryParameter("voice_id", voice.id).appendQueryParameter("clip_id", clip.id).build()
+    suspend fun preview(voice: Voice, clip: VoiceClip, target: File) {
+        val voiceId = URLEncoder.encode(voice.id, "UTF-8")
+        val clipId = URLEncoder.encode(clip.id, "UTF-8")
+        request("/voice-preview?voice_id=$voiceId&clip_id=$clipId") { connection ->
+            val type = connection.contentType.orEmpty().substringBefore(';')
+            if (type !in listOf("audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/wave")) {
+                throw IOException("Expected preview audio, received $type")
+            }
+            copyAudio(connection, target)
+        }
+    }
 
     suspend fun generate(request: GenerationRequest): GenerationJob {
         val result = json("/generate", JSONObject()
@@ -96,6 +104,18 @@ class RingtoneApi(private val baseUrl: String = BASE_URL) {
         if (type !in listOf("audio/wav", "audio/x-wav", "audio/wave", "application/octet-stream")) {
             throw IOException("Expected WAV audio, received $type")
         }
+        copyAudio(connection, target)
+        target.inputStream().use {
+            val header = ByteArray(12)
+            if (it.read(header) != 12 ||
+                String(header, 0, 4, Charsets.US_ASCII) != "RIFF" ||
+                String(header, 8, 4, Charsets.US_ASCII) != "WAVE") {
+                throw IOException("Download is not a WAV file")
+            }
+        }
+    }
+
+    private suspend fun copyAudio(connection: HttpURLConnection, target: File) {
         connection.inputStream.use { input ->
             target.outputStream().use { output ->
                 val buffer = ByteArray(16 * 1024)
@@ -105,17 +125,10 @@ class RingtoneApi(private val baseUrl: String = BASE_URL) {
                     val count = input.read(buffer)
                     if (count < 0) break
                     total += count
-                    if (total > 100 * 1024 * 1024) throw IOException("Ringtone exceeds 100 MB")
+                    if (total > 100 * 1024 * 1024) throw IOException("Audio exceeds 100 MB")
                     output.write(buffer, 0, count)
                 }
-            }
-        }
-        target.inputStream().use {
-            val header = ByteArray(12)
-            if (it.read(header) != 12 ||
-                String(header, 0, 4, Charsets.US_ASCII) != "RIFF" ||
-                String(header, 8, 4, Charsets.US_ASCII) != "WAVE") {
-                throw IOException("Download is not a WAV file")
+                if (total == 0L) throw IOException("Server returned empty audio")
             }
         }
     }

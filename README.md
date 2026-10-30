@@ -6,7 +6,7 @@ A small Android app using standard Views. No account or backend configuration is
 
 1. Load contacts and grant Contacts access. The overview shows every contact and their current ringtone.
 2. Tap a contact, then use **Play selected contact's ringtone** to listen.
-3. Choose a voice and its clip; **Preview clip** streams the server's reference audio.
+3. Choose a voice and its clip; **Preview clip** downloads the server's reference audio into a temporary app cache file and plays it locally. Stop audio, changing the selection, or leaving the screen cancels preview loading.
 4. **Generate ringtone** sends only the selected contact's name as `caller`, `receiver: "viktor"`, the voice/clip IDs, and a fresh UUID4.
 5. The app checks the returned status URL every four seconds, then downloads the WAV only after `done`.
 6. **Assign ringtone to [name]** requests contact write access and updates that contact. Select that contact and press Play again to listen.
@@ -28,7 +28,7 @@ The response schemas are unconstrained JSON in OpenAPI; response fields follow t
 
 ## Job behavior and limits
 
-Rotation preserves the active job and selections through a ViewModel. Network requests have a 10-second connection timeout and 30-second read timeout. HTTP/server errors appear on screen. **Retry / resume same job** resubmits the original UUID, allowing recovery even if the POST response was lost.
+Rotation preserves the active job and selections through a ViewModel. Network requests have a 10-second connection timeout and 30-second read timeout. HTTP/server errors appear on screen. Each press of Generate creates a new UUID; there is no retry/resume job action.
 
 Cancel stops local monitoring and downloading; the API has no endpoint to cancel server work. An in-flight HTTP request may take until its timeout to release resources. Finishing the activity or process termination stops monitoring; job state is not persisted across app restarts. Completed WAV files remain available in ringtone storage.
 

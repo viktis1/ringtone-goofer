@@ -27,11 +27,9 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     val status = MutableLiveData("Load contacts and choose a person.")
     val busy = MutableLiveData(false)
     val generated = MutableLiveData<GeneratedRingtone?>(null)
-    val retryAvailable = MutableLiveData(false)
     var selectedContact: AddressBookContact? = null
     var voiceId: String? = null
     var clipId: String? = null
-    private var pending: PendingGeneration? = null
     private var generation: Job? = null
     private var loadingContacts = false
     private var loadingVoices = false
@@ -77,23 +75,18 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
             status.value = "This contact needs a name before generating a ringtone."
             return
         }
-        pending = PendingGeneration(GenerationRequest(UUID.randomUUID().toString(),
+        val work = PendingGeneration(GenerationRequest(UUID.randomUUID().toString(),
             contact.name, voice.id, clip.id), contact)
         generated.value = null
-        startGeneration()
+        startGeneration(work)
     }
 
-    fun retry() { if (busy.value != true && pending != null) startGeneration() }
-
-    private fun startGeneration() {
-        val work = pending ?: return
+    private fun startGeneration(work: PendingGeneration) {
         busy.value = true
-        retryAvailable.value = false
         generation = viewModelScope.launch {
             val temp = File(getApplication<Application>().cacheDir, "ringtone-${work.request.jobId}.wav")
             try {
                 status.value = "Submitting…"
-                // Retrying uses the same client UUID, including after a lost POST response.
                 val job = api.generate(work.request)
                 var current = GenerationStatus(job.status, null)
                 while (true) {
@@ -118,12 +111,10 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
                 }
                 generated.value = GeneratedRingtone(uri, work.contact)
                 status.value = "Downloaded for ${work.contact.name}. Tap Assign to contact."
-                pending = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 status.value = "Generation/download error: ${e.message}"
-                retryAvailable.value = true
             } finally {
                 withContext(kotlinx.coroutines.NonCancellable) {
                     withContext(Dispatchers.IO) { temp.delete() }
@@ -135,7 +126,6 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
 
     fun cancel() {
         generation?.cancel()
-        retryAvailable.value = pending != null
         status.value = "Stopped checking this job. The server may still finish it."
     }
 

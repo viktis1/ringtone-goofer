@@ -28,6 +28,12 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileInputStream
 
 class MainActivity : AppCompatActivity() {
     private lateinit var model: RingtoneViewModel
@@ -39,11 +45,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewButton: Button
     private lateinit var assignButton: Button
     private lateinit var cancelButton: Button
-    private lateinit var retryButton: Button
     private lateinit var contactRows: ArrayAdapter<String>
     private var rows = emptyList<AddressBookContact>()
     private var voiceChoices = emptyList<Voice>()
     private var clipChoices = emptyList<VoiceClip>()
+    private var previewTask: Job? = null
     private var player: MediaPlayer? = null
     private var ringtone: Ringtone? = null
     private val handler = Handler(Looper.getMainLooper())
@@ -101,7 +107,7 @@ class MainActivity : AppCompatActivity() {
         previewButton = button("Preview clip") {
             val voice = voiceChoices.firstOrNull { it.id == model.voiceId }
             val clip = clipChoices.firstOrNull { it.id == model.clipId }
-            if (voice != null && clip != null) playPreview(model.api.previewUrl(voice, clip))
+            if (voice != null && clip != null) playPreview(voice, clip)
         }
         generateButton = button("Generate ringtone") {
             stopAudio()
@@ -111,7 +117,6 @@ class MainActivity : AppCompatActivity() {
             } else model.generate()
         }
         cancelButton = button("Cancel job monitoring") { model.cancel() }
-        retryButton = button("Retry / resume same job") { model.retry() }
         assignButton = button("Assign downloaded ringtone to contact") {
             withPermission(Manifest.permission.WRITE_CONTACTS,
                 "Contacts write access is needed to assign the downloaded ringtone.") { model.assign() }
@@ -170,7 +175,6 @@ class MainActivity : AppCompatActivity() {
         model.status.observe(this) { status.text = it }
         model.busy.observe(this) { updateControls() }
         model.generated.observe(this) { updateControls() }
-        model.retryAvailable.observe(this) { updateControls() }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
             model.loadContacts()
         }
@@ -199,7 +203,6 @@ class MainActivity : AppCompatActivity() {
         generateButton.isEnabled = !busy && contact != null && model.clipId != null
         previewButton.isEnabled = model.clipId != null
         cancelButton.isEnabled = busy
-        retryButton.isEnabled = !busy && model.retryAvailable.value == true
         assignButton.isEnabled = !busy && model.generated.value != null
         model.generated.value?.let { assignButton.text = "Assign ringtone to ${it.contact.name}" }
     }
@@ -233,29 +236,55 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun playPreview(uri: Uri) {
+    private fun playPreview(voice: Voice, clip: VoiceClip) {
         stopAudio()
-        try {
-            val audio = MediaPlayer()
-            player = audio
-            audio.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build())
-            audio.setDataSource(this, uri)
-            audio.setOnPreparedListener { if (player === it) { handler.removeCallbacksAndMessages(null); it.start() } }
-            audio.setOnCompletionListener { stopAudio() }
-            audio.setOnErrorListener { _, _, _ ->
-                stopAudio(); model.status.value = "Audio preview unavailable."; true
+        model.status.value = "Loading preview…"
+        previewTask = lifecycleScope.launch {
+            var file: File? = null
+            try {
+                val cached = File.createTempFile("voice-preview-", ".audio", cacheDir)
+                file = cached
+                model.api.preview(voice, clip, cached)
+                val audio = MediaPlayer()
+                player = audio
+                audio.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build())
+                // MediaPlayer duplicates this descriptor; the cache file can be deleted after setDataSource.
+                FileInputStream(cached).use { audio.setDataSource(it.fd) }
+                audio.setOnPreparedListener {
+                    if (player === it) {
+                        handler.removeCallbacksAndMessages(null)
+                        it.start()
+                        model.status.value = "Playing preview: ${clip.name}"
+                    }
+                }
+                audio.setOnCompletionListener {
+                    if (player === it) { stopAudio(); model.status.value = "Preview finished." }
+                }
+                audio.setOnErrorListener { failed, what, extra ->
+                    if (player === failed) {
+                        stopAudio()
+                        model.status.value = "Cannot play preview (player error $what / $extra)."
+                    }
+                    true
+                }
+                handler.postDelayed({
+                    if (player === audio) { stopAudio(); model.status.value = "Audio preview timed out." }
+                }, 30_000)
+                audio.prepareAsync()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                stopAudio()
+                model.status.value = "Cannot preview clip: ${e.message}"
+            } finally {
+                file?.delete()
             }
-            handler.postDelayed({
-                if (player === audio) { stopAudio(); model.status.value = "Audio preview timed out." }
-            }, 30_000)
-            audio.prepareAsync()
-        } catch (e: Exception) {
-            stopAudio()
-            model.status.value = "Cannot preview clip: ${e.message}"
         }
     }
 
     private fun stopAudio() {
+        previewTask?.cancel()
+        previewTask = null
         handler.removeCallbacksAndMessages(null)
         player?.release()
         player = null

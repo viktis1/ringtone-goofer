@@ -89,6 +89,45 @@ class RingtoneApiTest {
         }
     }
 
+    @Test fun previewDownloadsChunkedAudioAndEncodesClipNames() = runBlocking {
+        val query = java.util.concurrent.atomic.AtomicReference<String>()
+        server.createContext("/voice-preview") { exchange ->
+            query.set(exchange.requestURI.rawQuery)
+            exchange.responseHeaders.set("Content-Type", "audio/mpeg")
+            // Like the live preview API: no Content-Length and no byte-range support.
+            exchange.sendResponseHeaders(200, 0)
+            exchange.responseBody.use { it.write("MP3 clip bytes".toByteArray()) }
+            exchange.close()
+        }
+        val target = File.createTempFile("preview-test", ".audio")
+        try {
+            api.preview(Voice("voice + &", "Voice", emptyList()),
+                VoiceClip("A clip's name + & ?.mp3", "Clip"), target)
+            assertEquals("MP3 clip bytes", target.readText())
+            val parameters = query.get().split("&").associate {
+                val (key, value) = it.split("=", limit = 2)
+                key to java.net.URLDecoder.decode(value, "UTF-8")
+            }
+            assertEquals("voice + &", parameters["voice_id"])
+            assertEquals("A clip's name + & ?.mp3", parameters["clip_id"])
+        } finally { target.delete() }
+    }
+
+    @Test fun previewSurfacesServerErrorInsteadOfPassingItToPlayer() = runBlocking {
+        respond("/voice-preview", """{"detail":"Clip missing"}""", 404)
+        val target = File.createTempFile("preview-test", ".audio")
+        try {
+            try {
+                api.preview(Voice("voice", "Voice", emptyList()), VoiceClip("missing", "Missing"), target)
+                fail("Expected preview HTTP failure")
+            } catch (e: IOException) {
+                assertTrue(e.message.orEmpty().contains("404"))
+                assertTrue(e.message.orEmpty().contains("Clip missing"))
+            }
+            assertEquals(0L, target.length())
+        } finally { target.delete() }
+    }
+
     @Test fun downloadWritesWavAndRejectsHtml() = runBlocking {
         respond("/download/ok", "RIFF0000WAVEaudio", type = "audio/wav")
         respond("/download/bad", "<html>Bad gateway</html>", type = "text/html")
