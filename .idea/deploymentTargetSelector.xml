@@ -4,10 +4,10 @@
     <selectionStates>
       <SelectionState runConfigName="app">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-10-30T12:21:05.103513737Z">
+        <DropdownSelection timestamp="2026-10-30T18:29:41.213987367Z">
           <Target type="DEFAULT_BOOT">
             <handle>
-              <DeviceId pluginId="Wireless" identifier="serviceName=adb-RFCX10GWJ7E-MfEfWF" />
+              <DeviceId pluginId="LocalEmulator" identifier="path=/home/viktor-laptop/.android/avd/Medium_Phone.avd" />
             </handle>
           </Target>
         </DropdownSelection>

@@ -26,6 +26,9 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     val voices = MutableLiveData<List<Voice>>(emptyList())
     val status = MutableLiveData("Load contacts and choose a person.")
     val busy = MutableLiveData(false)
+    val recording = MutableLiveData(false)
+    val stoppingRecording = MutableLiveData(false)
+    private var recorder: ContactAudioRecorder? = null
     val generated = MutableLiveData<GeneratedRingtone?>(null)
     var selectedContact: AddressBookContact? = null
     var voiceId: String? = null
@@ -67,7 +70,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun generate() {
-        if (busy.value == true) return
+        if (busy.value == true || recording.value == true) return
         val contact = selectedContact ?: return
         val voice = voices.value?.firstOrNull { it.id == voiceId } ?: return
         val clip = voice.clips.firstOrNull { it.id == clipId } ?: return
@@ -127,6 +130,41 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     fun cancel() {
         generation?.cancel()
         status.value = "Stopped checking this job. The server may still finish it."
+    }
+
+    fun recordingFile(contact: AddressBookContact): File =
+        contactRecordingFile(getApplication<Application>().filesDir, contact.name)
+
+    fun startRecording() {
+        if (recording.value == true || busy.value == true) return
+        val contact = selectedContact ?: return
+        val file = recordingFile(contact)
+        val session = ContactAudioRecorder(getApplication(), file)
+        recorder = session
+        recording.value = true
+        stoppingRecording.value = false
+        status.value = "Recording for ${contact.name}… Tap Stop and save."
+        viewModelScope.launch {
+            try {
+                session.record()
+                status.value = "Saved recording/${file.name}."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                status.value = "Cannot record audio: ${e.message}"
+            } finally {
+                recorder = null
+                recording.value = false
+                stoppingRecording.value = false
+            }
+        }
+    }
+
+    fun stopRecording() {
+        if (recording.value != true || stoppingRecording.value == true) return
+        stoppingRecording.value = true
+        status.value = "Saving recording…"
+        recorder?.stop()
     }
 
     fun assign() {

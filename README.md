@@ -13,6 +13,14 @@ A small Android app using standard Views. No account or backend configuration is
 
 Downloads are saved in shared storage under `Ringtones/RingtoneGoofer` using MediaStore, so Android's phone app can access them. Android 7–9 additionally require storage permission. No permission to change the phone's default ringtone is needed.
 
+## Contact recordings
+
+Select a contact and press **Record audio for selected contact**. Grant microphone access, speak, then press the same button (now **Stop and save recording**). **Play recorded audio for selected contact** plays the saved recording; **Stop audio** stops playback.
+
+Files are stored privately in `filesDir/recording/Contact-Name.wav`. Whitespace becomes hyphens, unsafe path characters are removed, and long names are shortened. There is no database; identical normalized names share a file, and renaming a contact changes the filename used for it. Recording again asks before replacement, and a failed recording preserves the previous file.
+
+Audio is uncompressed 44.1 kHz, 16-bit mono PCM WAV (about 5 MB per minute). Leaving the screen or rotating stops and saves the recording. Recordings stay on the device and are not sent to the generation API. No storage permission is needed for these private files.
+
 ## Code
 
 - `MainActivity.kt`: a scrollable screen, permission prompts, and audio playback.

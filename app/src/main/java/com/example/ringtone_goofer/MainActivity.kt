@@ -43,6 +43,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var clipPicker: Spinner
     private lateinit var generateButton: Button
     private lateinit var previewButton: Button
+    private lateinit var recordButton: Button
+    private lateinit var playRecordingButton: Button
+    private lateinit var playContactButton: Button
     private lateinit var assignButton: Button
     private lateinit var cancelButton: Button
     private lateinit var contactRows: ArrayAdapter<String>
@@ -62,6 +65,7 @@ class MainActivity : AppCompatActivity() {
             when (permission) {
                 Manifest.permission.READ_CONTACTS -> model.loadContacts()
                 Manifest.permission.WRITE_CONTACTS -> model.assign()
+                Manifest.permission.RECORD_AUDIO -> model.startRecording()
                 Manifest.permission.WRITE_EXTERNAL_STORAGE -> model.generate()
             }
         } else {
@@ -95,8 +99,12 @@ class MainActivity : AppCompatActivity() {
                 "Contacts access lets you select a person and see their current ringtone.") { model.loadContacts() }
         }
         selected = label("Select a contact from the overview below.")
-        button("Play selected contact's ringtone") { playContact() }
+        playContactButton = button("Play selected contact's ringtone") { playContact() }
         button("Stop audio") { stopAudio() }
+        recordButton = button("Record audio for selected contact") {
+            if (model.recording.value == true) model.stopRecording() else requestRecording()
+        }
+        playRecordingButton = button("Play recorded audio for selected contact") { playRecording() }
         label("Generate a new ringtone")
         label("Only the selected contact's name is sent to the ringtone server. Receiver: viktor.")
         button("Load / retry voices") { model.loadVoices() }
@@ -130,7 +138,7 @@ class MainActivity : AppCompatActivity() {
             adapter = contactRows
             setOnItemClickListener { _, _, position, _ ->
                 rows.getOrNull(position - headerViewsCount)?.let {
-                    if (model.busy.value != true) {
+                    if (model.busy.value != true && model.recording.value != true) {
                         stopAudio()
                         model.selectedContact = it
                         updateControls()
@@ -174,6 +182,8 @@ class MainActivity : AppCompatActivity() {
         }
         model.status.observe(this) { status.text = it }
         model.busy.observe(this) { updateControls() }
+        model.recording.observe(this) { updateControls() }
+        model.stoppingRecording.observe(this) { updateControls() }
         model.generated.observe(this) { updateControls() }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
             model.loadContacts()
@@ -195,14 +205,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateControls() {
-        val busy = model.busy.value == true
+        val recording = model.recording.value == true
+        val busy = model.busy.value == true || recording
         val contact = model.selectedContact
         selected.text = contact?.let { "Selected: ${it.name} · ${it.ringtoneName}" } ?: "Select a contact below."
         voicePicker.isEnabled = !busy
         clipPicker.isEnabled = !busy
         generateButton.isEnabled = !busy && contact != null && model.clipId != null
-        previewButton.isEnabled = model.clipId != null
-        cancelButton.isEnabled = busy
+        previewButton.isEnabled = !recording && model.clipId != null
+        playContactButton.isEnabled = !recording && contact != null
+        recordButton.text = if (recording) "Stop and save recording" else "Record audio for selected contact"
+        recordButton.isEnabled = if (recording) model.stoppingRecording.value != true else !busy && contact != null
+        playRecordingButton.isEnabled = !recording && contact != null
+        cancelButton.isEnabled = model.busy.value == true
         assignButton.isEnabled = !busy && model.generated.value != null
         model.generated.value?.let { assignButton.text = "Assign ringtone to ${it.contact.name}" }
     }
@@ -219,6 +234,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun playContact() {
+        if (model.recording.value == true) return
         val contact = model.selectedContact ?: return
         stopAudio()
         try {
@@ -237,6 +253,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun playPreview(voice: Voice, clip: VoiceClip) {
+        if (model.recording.value == true) return
         stopAudio()
         model.status.value = "Loading preview…"
         previewTask = lifecycleScope.launch {
@@ -245,32 +262,7 @@ class MainActivity : AppCompatActivity() {
                 val cached = File.createTempFile("voice-preview-", ".audio", cacheDir)
                 file = cached
                 model.api.preview(voice, clip, cached)
-                val audio = MediaPlayer()
-                player = audio
-                audio.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build())
-                // MediaPlayer duplicates this descriptor; the cache file can be deleted after setDataSource.
-                FileInputStream(cached).use { audio.setDataSource(it.fd) }
-                audio.setOnPreparedListener {
-                    if (player === it) {
-                        handler.removeCallbacksAndMessages(null)
-                        it.start()
-                        model.status.value = "Playing preview: ${clip.name}"
-                    }
-                }
-                audio.setOnCompletionListener {
-                    if (player === it) { stopAudio(); model.status.value = "Preview finished." }
-                }
-                audio.setOnErrorListener { failed, what, extra ->
-                    if (player === failed) {
-                        stopAudio()
-                        model.status.value = "Cannot play preview (player error $what / $extra)."
-                    }
-                    true
-                }
-                handler.postDelayed({
-                    if (player === audio) { stopAudio(); model.status.value = "Audio preview timed out." }
-                }, 30_000)
-                audio.prepareAsync()
+                playLocalAudio(cached, "preview: ${clip.name}")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -280,6 +272,68 @@ class MainActivity : AppCompatActivity() {
                 file?.delete()
             }
         }
+    }
+
+    private fun requestRecording() {
+        val contact = model.selectedContact ?: return
+        stopAudio()
+        val start = {
+            withPermission(Manifest.permission.RECORD_AUDIO,
+                "Microphone access is needed to record audio for this contact.") { model.startRecording() }
+        }
+        val file = model.recordingFile(contact)
+        if (file.exists()) {
+            AlertDialog.Builder(this)
+                .setMessage("Replace the existing recording ${file.name}?")
+                .setPositiveButton("Record again") { _, _ -> start() }
+                .setNegativeButton("Cancel", null).show()
+        } else start()
+    }
+
+    private fun playRecording() {
+        if (model.recording.value == true) return
+        val contact = model.selectedContact ?: return
+        stopAudio()
+        val file = model.recordingFile(contact)
+        if (!file.isFile) {
+            model.status.value = "No recording for ${contact.name} yet."
+            return
+        }
+        try {
+            playLocalAudio(file, "recording for ${contact.name}")
+        } catch (e: Exception) {
+            stopAudio()
+            model.status.value = "Cannot play recording: ${e.message}"
+        }
+    }
+
+    private fun playLocalAudio(file: File, description: String) {
+        val audio = MediaPlayer()
+        player = audio
+        audio.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build())
+        // MediaPlayer keeps its own descriptor, including for a preview cache file deleted after this call.
+        FileInputStream(file).use { audio.setDataSource(it.fd) }
+        audio.setOnPreparedListener {
+            if (player === it) {
+                handler.removeCallbacksAndMessages(null)
+                it.start()
+                model.status.value = "Playing $description"
+            }
+        }
+        audio.setOnCompletionListener {
+            if (player === it) { stopAudio(); model.status.value = "Playback finished." }
+        }
+        audio.setOnErrorListener { failed, what, extra ->
+            if (player === failed) {
+                stopAudio()
+                model.status.value = "Cannot play $description (player error $what / $extra)."
+            }
+            true
+        }
+        handler.postDelayed({
+            if (player === audio) { stopAudio(); model.status.value = "Audio playback timed out." }
+        }, 30_000)
+        audio.prepareAsync()
     }
 
     private fun stopAudio() {
@@ -297,5 +351,9 @@ class MainActivity : AppCompatActivity() {
         super.onSaveInstanceState(outState)
     }
 
-    override fun onStop() { stopAudio(); super.onStop() }
+    override fun onStop() {
+        stopAudio()
+        model.stopRecording()
+        super.onStop()
+    }
 }
