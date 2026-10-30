@@ -1,0 +1,122 @@
+package com.example.ringtone_goofer
+
+import android.net.Uri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.coroutines.coroutineContext
+
+data class VoiceClip(val id: String, val name: String)
+data class Voice(val id: String, val name: String, val clips: List<VoiceClip>)
+data class GenerationRequest(
+    val jobId: String, val caller: String, val voiceId: String, val clipId: String
+)
+data class GenerationJob(val id: String, val statusUrl: String, val downloadUrl: String, val status: String)
+data class GenerationStatus(val status: String, val error: String?)
+
+/** Fields and paths follow the server's /openapi.json (including its prose response contracts). */
+class RingtoneApi(private val baseUrl: String = BASE_URL) {
+    companion object {
+        const val BASE_URL = "https://create-ringtone.viktor-homelab.cloud"
+    }
+
+    private suspend fun <T> request(
+        path: String, body: JSONObject? = null, read: suspend (HttpURLConnection) -> T
+    ): T = withContext(Dispatchers.IO) {
+        val base = URL(baseUrl)
+        val url = URL(base, path)
+        require(url.protocol == base.protocol && url.host == base.host && url.port == base.port && url.userInfo == null) {
+            "Unexpected API URL"
+        }
+        val connection = url.openConnection() as HttpURLConnection
+        try {
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 30_000
+            connection.instanceFollowRedirects = false
+            if (body != null) {
+                connection.requestMethod = "POST"
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            }
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                val detail = connection.errorStream?.bufferedReader()?.use { it.readText().take(1000) }.orEmpty()
+                throw IOException("HTTP $code: $detail")
+            }
+            coroutineContext.ensureActive()
+            read(connection)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private suspend fun json(path: String, body: JSONObject? = null) =
+        request(path, body) { connection ->
+            JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        }
+
+    suspend fun voices(): List<Voice> {
+        val voices = json("/voices").getJSONArray("voices")
+        return List(voices.length()) { index ->
+            val voice = voices.getJSONObject(index)
+            val clips = voice.getJSONArray("clips")
+            Voice(voice.getString("id"), voice.getString("name"), List(clips.length()) {
+                val clip = clips.getJSONObject(it)
+                VoiceClip(clip.getString("id"), clip.getString("name"))
+            })
+        }
+    }
+
+    fun previewUrl(voice: Voice, clip: VoiceClip): Uri =
+        Uri.parse("$baseUrl/voice-preview").buildUpon()
+            .appendQueryParameter("voice_id", voice.id).appendQueryParameter("clip_id", clip.id).build()
+
+    suspend fun generate(request: GenerationRequest): GenerationJob {
+        val result = json("/generate", JSONObject()
+            .put("job_id", request.jobId).put("caller", request.caller).put("receiver", "viktor")
+            .put("voice_id", request.voiceId).put("clip_id", request.clipId))
+        return GenerationJob(result.getString("job_id"), result.getString("status_url"),
+            result.getString("download_url"), result.getString("status"))
+    }
+
+    suspend fun status(job: GenerationJob): GenerationStatus {
+        val result = json(job.statusUrl)
+        return GenerationStatus(result.getString("status"),
+            result.optString("error").takeIf { it.isNotBlank() && it != "null" })
+    }
+
+    suspend fun download(job: GenerationJob, target: File) = request(job.downloadUrl) { connection ->
+        val type = connection.contentType.orEmpty().substringBefore(';')
+        if (type !in listOf("audio/wav", "audio/x-wav", "audio/wave", "application/octet-stream")) {
+            throw IOException("Expected WAV audio, received $type")
+        }
+        connection.inputStream.use { input ->
+            target.outputStream().use { output ->
+                val buffer = ByteArray(16 * 1024)
+                var total = 0L
+                while (true) {
+                    coroutineContext.ensureActive()
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    if (total > 100 * 1024 * 1024) throw IOException("Ringtone exceeds 100 MB")
+                    output.write(buffer, 0, count)
+                }
+            }
+        }
+        target.inputStream().use {
+            val header = ByteArray(12)
+            if (it.read(header) != 12 ||
+                String(header, 0, 4, Charsets.US_ASCII) != "RIFF" ||
+                String(header, 8, 4, Charsets.US_ASCII) != "WAVE") {
+                throw IOException("Download is not a WAV file")
+            }
+        }
+    }
+}
