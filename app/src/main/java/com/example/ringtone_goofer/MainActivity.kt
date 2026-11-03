@@ -14,6 +14,9 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.View
+import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageMetadata
+import com.google.firebase.storage.UploadTask
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -43,10 +46,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileInputStream
+import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
     private val auth by lazy { FirebaseAuth.getInstance() }
     private lateinit var signInButton: Button
+    private lateinit var uploadButton: Button
+    private var uploading = false
     private lateinit var model: RingtoneViewModel
     private lateinit var selected: TextView
     private lateinit var status: TextView
@@ -118,6 +124,7 @@ class MainActivity : AppCompatActivity() {
             if (model.recording.value == true) model.stopRecording() else requestRecording()
         }
         playRecordingButton = button("Play recorded audio for selected contact") { playRecording() }
+        uploadButton = button("Upload recorded audio for selected contact") { uploadRecording() }
         label("Generate a new ringtone")
         label("Only the selected contact's name is sent to the ringtone server. Receiver: viktor.")
         button("Load / retry voices") { model.loadVoices() }
@@ -228,7 +235,8 @@ class MainActivity : AppCompatActivity() {
         previewButton.isEnabled = !recording && model.clipId != null
         playContactButton.isEnabled = !recording && contact != null
         recordButton.text = if (recording) "Stop and save recording" else "Record audio for selected contact"
-        recordButton.isEnabled = if (recording) model.stoppingRecording.value != true else !busy && contact != null
+        recordButton.isEnabled = if (recording) model.stoppingRecording.value != true else !busy && !uploading && contact != null
+        uploadButton.isEnabled = !recording && !uploading && contact != null
         playRecordingButton.isEnabled = !recording && contact != null
         cancelButton.isEnabled = model.busy.value == true
         assignButton.isEnabled = !busy && model.generated.value != null
@@ -357,6 +365,46 @@ class MainActivity : AppCompatActivity() {
         player = null
         ringtone?.stop()
         ringtone = null
+    }
+
+    private fun uploadRecording() {
+        if (uploading || model.recording.value == true) return
+        val contact = model.selectedContact ?: return
+        val file = model.recordingFile(contact)
+        if (!file.isFile) {
+            model.status.value = "No recording for ${contact.name} yet."
+            return
+        }
+        val user = auth.currentUser ?: run {
+            model.status.value = "Sign in before uploading."
+            return
+        }
+        uploading = true
+        updateControls()
+        lifecycleScope.launch {
+            var upload: UploadTask? = null
+            try {
+                val fileName = file.name
+                val storage = FirebaseStorage.getInstance(getString(R.string.upload_bucket_url))
+                val destination = storage.reference.child("users/${user.uid}/$fileName")
+                val metadata = StorageMetadata.Builder()
+                    .setContentType("audio/wav")
+                    .setCustomMetadata("uuid", UUID.randomUUID().toString())
+                    .build()
+                model.status.value = "Uploading recording for ${contact.name}…"
+                upload = destination.putFile(Uri.fromFile(file), metadata)
+                upload.await()
+                model.status.value = "Uploaded to ${destination.path}"
+            } catch (e: CancellationException) {
+                upload?.cancel()
+                throw e
+            } catch (e: Exception) {
+                model.status.value = "Upload failed: ${e.localizedMessage}"
+            } finally {
+                uploading = false
+                updateControls()
+            }
+        }
     }
 
     private fun updateSignInButton() {
