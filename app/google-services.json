@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "1094530592033",
+    "project_id": "ringtone-k8s",
+    "storage_bucket": "ringtone-k8s.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1094530592033:android:49fa0d7c0d8ffab3946260",
+        "android_client_info": {
+          "package_name": "com.example.ringtone_goofer"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1094530592033-veq81051v3amuddjtetl93fbft3of1ut.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC6ndg9cyJL5r0O-Blwe7LTHeTV6TJyhA4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1094530592033-veq81051v3amuddjtetl93fbft3of1ut.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

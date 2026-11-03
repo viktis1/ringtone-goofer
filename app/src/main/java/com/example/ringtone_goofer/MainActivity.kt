@@ -24,6 +24,15 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.GoogleAuthProvider
+import kotlinx.coroutines.tasks.await
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -36,6 +45,8 @@ import java.io.File
 import java.io.FileInputStream
 
 class MainActivity : AppCompatActivity() {
+    private val auth by lazy { FirebaseAuth.getInstance() }
+    private lateinit var signInButton: Button
     private lateinit var model: RingtoneViewModel
     private lateinit var selected: TextView
     private lateinit var status: TextView
@@ -94,6 +105,8 @@ class MainActivity : AppCompatActivity() {
             this.text = text; setOnClickListener { action() }; header.addView(this)
         }
         label("Ringtone Goofer")
+        signInButton = button("Sign in with Google") { signIn() }
+        updateSignInButton()
         button("Load / refresh contacts") {
             withPermission(Manifest.permission.READ_CONTACTS,
                 "Contacts access lets you select a person and see their current ringtone.") { model.loadContacts() }
@@ -344,6 +357,43 @@ class MainActivity : AppCompatActivity() {
         player = null
         ringtone?.stop()
         ringtone = null
+    }
+
+    private fun updateSignInButton() {
+        val user = auth.currentUser
+        signInButton.text = if (user == null) "Sign in with Google"
+            else "Signed in as ${user.email ?: user.displayName ?: "Google user"}"
+        signInButton.isEnabled = user == null
+    }
+
+    private fun signIn() {
+        signInButton.isEnabled = false
+        lifecycleScope.launch {
+            try {
+                val option = GetSignInWithGoogleOption.Builder(
+                    getString(R.string.default_web_client_id)
+                ).build()
+                val request = GetCredentialRequest.Builder()
+                    .addCredentialOption(option)
+                    .build()
+                val credential = CredentialManager.create(this@MainActivity)
+                    .getCredential(this@MainActivity, request).credential
+                check(credential is CustomCredential &&
+                    credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                    "Unexpected sign-in credential."
+                }
+                val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+                auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
+            } catch (_: GetCredentialCancellationException) {
+                // Closing the account picker leaves the user signed out.
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                model.status.value = "Sign-in failed: ${e.localizedMessage}"
+            } finally {
+                updateSignInButton()
+            }
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
