@@ -21,6 +21,7 @@ data class GenerationRequest(
 data class GenerationJob(val id: String, val statusUrl: String, val downloadUrl: String, val status: String)
 data class GenerationStatus(val status: String, val error: String?)
 class ApiHttpException(val code: Int, detail: String) : IOException("HTTP $code: $detail")
+class ApiConnectionException(cause: IOException) : IOException(cause.message, cause)
 
 /** Fields and paths follow the server's /openapi.json (including its prose response contracts). */
 class RingtoneApi(
@@ -42,12 +43,13 @@ class RingtoneApi(
         require(url.protocol == base.protocol && url.host == base.host && url.port == base.port && url.userInfo == null) {
             "Unexpected API URL"
         }
+        val token = idToken() // Token/sign-in failures must not trigger the server-offline fallback.
         val connection = url.openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 10_000
             connection.readTimeout = 30_000
             connection.instanceFollowRedirects = false
-            connection.setRequestProperty("Authorization", "Bearer ${idToken()}")
+            connection.setRequestProperty("Authorization", "Bearer $token")
             if (body != null) {
                 connection.requestMethod = "POST"
                 connection.doOutput = true
@@ -61,6 +63,9 @@ class RingtoneApi(
             }
             coroutineContext.ensureActive()
             read(connection)
+        } catch (e: IOException) {
+            if (e is ApiHttpException || e is javax.net.ssl.SSLException) throw e
+            throw ApiConnectionException(e)
         } finally {
             connection.disconnect()
         }

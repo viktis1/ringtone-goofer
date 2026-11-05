@@ -170,7 +170,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun generate(viaUpload: Boolean = false) {
+    fun generate() {
         if (busy.value == true || recording.value == true) return
         val contact = selectedContact ?: return
         val voice = voices.value?.firstOrNull { it.id == voiceId } ?: return
@@ -182,31 +182,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         val work = PendingGeneration(GenerationRequest(UUID.randomUUID().toString(),
             contact.name, voice.id, clip.id), contact)
         generated.value = null
-        if (viaUpload) uploadGeneration(work) else startGeneration(work)
-    }
-
-    private fun uploadGeneration(work: PendingGeneration) {
-        val user = auth.currentUser ?: run {
-            status.value = "Sign in before submitting a generation request."
-            return
-        }
-        busy.value = true
-        generation = viewModelScope.launch {
-            try {
-                status.value = "Uploading generation request…"
-                val bucket = getApplication<Application>().getString(R.string.generation_request_bucket_url)
-                RingtoneRequestUpload(FirebaseStorage.getInstance(bucket)).submit(user.uid, work.request)
-                rememberJob(user.uid, SubmittedJob(work.request.jobId, work.contact.name, "Upload", "awaiting_worker"))
-                loadJobs()
-                status.value = "Generation request uploaded for ${work.contact.name}.\nJob: ${work.request.jobId}\nOpen Submitted jobs to follow progress."
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                status.value = "Generation upload failed: ${e.message}"
-            } finally {
-                busy.value = false
-            }
-        }
+        startGeneration(work)
     }
 
     private fun startGeneration(work: PendingGeneration) {
@@ -216,26 +192,45 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
             try {
                 status.value = "Submitting…"
                 val user = auth.currentUser ?: error("Sign in first.")
-                val job = api.generate(work.request)
-                rememberJob(user.uid, SubmittedJob(job.id, work.contact.name, "API", job.status))
+                val client = RingtoneApi(idToken = {
+                    user.getIdToken(false).await().token ?: error("Sign in first.")
+                })
+                val submission = submitGeneration(work.request, client::generate) { request ->
+                    ensureActive()
+                    check(auth.currentUser?.uid == user.uid) { "Account changed. Please generate again." }
+                    status.value = "Server unavailable. Uploading generation request…"
+                    val bucket = getApplication<Application>().getString(R.string.generation_request_bucket_url)
+                    RingtoneRequestUpload(FirebaseStorage.getInstance(bucket)).submit(user.uid, request)
+                }
+                val job = submission.job
+                rememberJob(user.uid, SubmittedJob(job.id, work.contact.name, submission.route, job.status))
                 loadJobs()
                 var current = GenerationStatus(job.status, null)
                 while (true) {
+                    ensureActive()
+                    check(auth.currentUser?.uid == user.uid) { "Account changed. Monitoring stopped." }
                     status.value = "${current.status} · ${work.contact.name}\nJob: ${job.id}"
                     when (current.status) {
                         "done" -> break
                         "failed" -> {
-                            error(current.error ?: api.status(job).error ?: "Generation failed")
+                            error(current.error ?: client.status(job).error ?: "Generation failed")
                         }
-                        "queued", "running" -> {
+                        "awaiting_worker", "queued", "running" -> {
                             delay(4_000)
-                            current = api.status(job)
+                            try {
+                                current = client.status(job)
+                            } catch (e: Exception) {
+                                if (!e.isServerUnavailable() &&
+                                    !(submission.route == "Upload" && e is ApiHttpException && e.code == 404)) throw e
+                                status.value = "Waiting for server/worker…\nJob: ${job.id}"
+                                delay(6_000)
+                            }
                         }
                         else -> error("Unknown job status: ${current.status}")
                     }
                 }
                 status.value = "Downloading WAV…"
-                api.download(job, temp)
+                client.download(job, temp)
                 val uri = withContext(Dispatchers.IO) {
                     ensureActive()
                     store.saveWav(temp, work.request.jobId, work.contact.name)
