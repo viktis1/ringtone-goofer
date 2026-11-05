@@ -20,6 +20,7 @@ data class GenerationRequest(
 )
 data class GenerationJob(val id: String, val statusUrl: String, val downloadUrl: String, val status: String)
 data class GenerationStatus(val status: String, val error: String?)
+class ApiHttpException(val code: Int, detail: String) : IOException("HTTP $code: $detail")
 
 /** Fields and paths follow the server's /openapi.json (including its prose response contracts). */
 class RingtoneApi(
@@ -56,7 +57,7 @@ class RingtoneApi(
             val code = connection.responseCode
             if (code !in 200..299) {
                 val detail = connection.errorStream?.bufferedReader()?.use { it.readText().take(1000) }.orEmpty()
-                throw IOException("HTTP $code: $detail")
+                throw ApiHttpException(code, detail)
             }
             coroutineContext.ensureActive()
             read(connection)

@@ -23,6 +23,8 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.Spinner
+import android.widget.ScrollView
+import androidx.lifecycle.Observer
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -149,6 +151,7 @@ class MainActivity : AppCompatActivity() {
             stopAudio()
             model.generate(viaUpload = true)
         }
+        button("Submitted jobs") { showSubmittedJobs() }
         cancelButton = button("Cancel job monitoring") { model.cancel() }
         assignButton = button("Assign downloaded ringtone to contact") {
             withPermission(Manifest.permission.WRITE_CONTACTS,
@@ -220,6 +223,30 @@ class MainActivity : AppCompatActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
             model.loadContacts()
         }
+    }
+
+    private fun showSubmittedJobs() {
+        val text = TextView(this).apply { setPadding(24, 16, 24, 16); setTextIsSelectable(true) }
+        val dialog = AlertDialog.Builder(this).setTitle("Submitted jobs")
+            .setView(ScrollView(this).apply { addView(text) })
+            .setPositiveButton("Close", null).setNeutralButton("Refresh", null).create()
+        fun render() {
+            text.text = model.jobsMessage.value.orEmpty() + "\n\n" +
+                model.submittedJobs.value.orEmpty().joinToString("\n\n") { job ->
+                    "${job.caller} · ${job.route}\n${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(job.created))}\n${job.id}\n${job.status}\n${job.detail}"
+                }.ifEmpty { "No jobs recorded for this account on this device yet." }
+        }
+        val rowsObserver = Observer<List<SubmittedJob>> { render() }
+        val messageObserver = Observer<String> { render() }
+        model.submittedJobs.observe(this, rowsObserver)
+        model.jobsMessage.observe(this, messageObserver)
+        dialog.setOnDismissListener {
+            model.submittedJobs.removeObserver(rowsObserver)
+            model.jobsMessage.removeObserver(messageObserver)
+        }
+        dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { model.loadJobs() } }
+        dialog.show()
+        model.loadJobs()
     }
 
     private fun selectionListener(action: (Int) -> Unit) = object : AdapterView.OnItemSelectedListener {

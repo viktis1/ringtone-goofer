@@ -42,7 +42,11 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     private val voiceCache = VoiceCache(File(application.noBackupFilesDir, "voices"))
     private var voiceUserId: String? = null
     private var voiceLoad: Job? = null
-    private val authListener = FirebaseAuth.AuthStateListener { loadVoices() }
+    val submittedJobs = MutableLiveData<List<SubmittedJob>>(emptyList())
+    val jobsMessage = MutableLiveData("")
+    private val jobHistory = JobHistory(File(application.noBackupFilesDir, "jobs"))
+    private var jobsPolling: Job? = null
+    private val authListener = FirebaseAuth.AuthStateListener { loadVoices(); loadJobs() }
 
     init { auth.addAuthStateListener(authListener) }
 
@@ -118,6 +122,54 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    private suspend fun rememberJob(uid: String, job: SubmittedJob) {
+        val rows = withContext(Dispatchers.IO) { jobHistory.put(uid, job) }
+        if (auth.currentUser?.uid == uid) submittedJobs.value = rows
+    }
+
+    fun loadJobs() {
+        jobsPolling?.cancel()
+        submittedJobs.value = emptyList()
+        val user = auth.currentUser ?: run {
+            jobsMessage.value = "Sign in to see your submitted jobs."
+            return
+        }
+        jobsPolling = viewModelScope.launch {
+            try {
+                val rows = withContext(Dispatchers.IO) { jobHistory.read(user.uid) }
+                ensureActive()
+                if (auth.currentUser?.uid != user.uid) return@launch
+                submittedJobs.value = rows
+                val client = RingtoneApi(idToken = {
+                    user.getIdToken(false).await().token ?: error("Sign in first.")
+                })
+                while (true) {
+                    jobsMessage.value = "Checking job status…"
+                    for (job in submittedJobs.value.orEmpty().filterNot { it.finished }) {
+                        val updated = try {
+                            val result = client.status(job.serverJob())
+                            job.copy(status = result.status, detail = result.error.orEmpty())
+                        } catch (e: Exception) {
+                            if (e is CancellationException) throw e
+                            if (e is ApiHttpException && e.code == 404)
+                                job.copy(detail = "Not on server yet; waiting for worker or acceptance.")
+                            else job.copy(detail = "Status unavailable: ${e.message}")
+                        }
+                        ensureActive()
+                        if (auth.currentUser?.uid != user.uid) return@launch
+                        rememberJob(user.uid, updated)
+                    }
+                    jobsMessage.value = "Jobs submitted from this app. Status checks run while the app is open."
+                    if (submittedJobs.value.orEmpty().all { it.finished }) break
+                    delay(10_000)
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (auth.currentUser?.uid == user.uid) jobsMessage.value = "Cannot load jobs: ${e.message}"
+            }
+        }
+    }
+
     fun generate(viaUpload: Boolean = false) {
         if (busy.value == true || recording.value == true) return
         val contact = selectedContact ?: return
@@ -144,7 +196,9 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
                 status.value = "Uploading generation request…"
                 val bucket = getApplication<Application>().getString(R.string.generation_request_bucket_url)
                 RingtoneRequestUpload(FirebaseStorage.getInstance(bucket)).submit(user.uid, work.request)
-                status.value = "Generation request uploaded for ${work.contact.name}.\nJob: ${work.request.jobId}\nQueued for the server; no status monitoring on this route yet."
+                rememberJob(user.uid, SubmittedJob(work.request.jobId, work.contact.name, "Upload", "awaiting_worker"))
+                loadJobs()
+                status.value = "Generation request uploaded for ${work.contact.name}.\nJob: ${work.request.jobId}\nOpen Submitted jobs to follow progress."
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -161,7 +215,10 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
             val temp = File(getApplication<Application>().cacheDir, "ringtone-${work.request.jobId}.wav")
             try {
                 status.value = "Submitting…"
+                val user = auth.currentUser ?: error("Sign in first.")
                 val job = api.generate(work.request)
+                rememberJob(user.uid, SubmittedJob(job.id, work.contact.name, "API", job.status))
+                loadJobs()
                 var current = GenerationStatus(job.status, null)
                 while (true) {
                     status.value = "${current.status} · ${work.contact.name}\nJob: ${job.id}"
