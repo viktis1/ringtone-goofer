@@ -20,7 +20,7 @@ class RingtoneApiTest {
     @Before fun setUp() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.start()
-        api = RingtoneApi("http://127.0.0.1:${server.address.port}")
+        api = RingtoneApi("http://127.0.0.1:${server.address.port}") { "test-token" }
     }
 
     @After fun tearDown() { server.stop(0) }
@@ -35,11 +35,31 @@ class RingtoneApiTest {
         }
     }
 
-    @Test fun voicesKeepClipIdsExactlyAsReturned() = runBlocking {
-        respond("/voices", """{"voices":[{"id":"voice","name":"Voice","clips":[{"id":"A clip's name.mp3","name":"Clip"}]}]}""")
-        val voice = api.voices().single()
-        assertEquals("voice", voice.id)
-        assertEquals("A clip's name.mp3", voice.clips.single().id)
+    @Test fun voicesParseGroupsAndKeepClipUuids() = runBlocking {
+        val uuid = "12345678-1234-4234-8234-123456789abc"
+        respond("/voices", """{"Public":{"Alex":{"clips":[{"id":"$uuid","name":"public/Alex.wav"}]}},"Your Uploads":{"Alex":{"clips":[]}}}""")
+        val voices = api.voices().associateBy { it.id }
+        assertEquals(setOf("Public:Alex", "Your Uploads:Alex"), voices.keys)
+        assertEquals("Alex · Public", voices.getValue("Public:Alex").name)
+        assertEquals(uuid, voices.getValue("Public:Alex").clips.single().id)
+        assertTrue(voices.getValue("Your Uploads:Alex").clips.isEmpty())
+    }
+
+    @Test fun requestsUseCurrentBearerToken() = runBlocking {
+        val headers = mutableListOf<String?>()
+        server.createContext("/voices") { exchange ->
+            headers.add(exchange.requestHeaders.getFirst("Authorization"))
+            val bytes = """{"Public":{},"Your Uploads":{}}""".toByteArray()
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+            exchange.close()
+        }
+        var token = "first"
+        val client = RingtoneApi("http://127.0.0.1:${server.address.port}") { token }
+        assertTrue(client.voices().isEmpty())
+        token = "refreshed"
+        client.voices()
+        assertEquals(listOf("Bearer first", "Bearer refreshed"), headers)
     }
 
     @Test fun submissionUsesSchemaAndRetryKeepsClientUuid() = runBlocking {

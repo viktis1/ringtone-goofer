@@ -432,6 +432,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
                 auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
+                model.loadVoices()
             } catch (_: GetCredentialCancellationException) {
                 // Closing the account picker leaves the user signed out.
             } catch (e: CancellationException) {

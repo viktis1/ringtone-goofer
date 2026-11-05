@@ -1,5 +1,7 @@
 package com.example.ringtone_goofer
 
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -20,7 +22,13 @@ data class GenerationJob(val id: String, val statusUrl: String, val downloadUrl:
 data class GenerationStatus(val status: String, val error: String?)
 
 /** Fields and paths follow the server's /openapi.json (including its prose response contracts). */
-class RingtoneApi(private val baseUrl: String = BASE_URL) {
+class RingtoneApi(
+    private val baseUrl: String = BASE_URL,
+    private val idToken: suspend () -> String = {
+        FirebaseAuth.getInstance().currentUser?.getIdToken(false)?.await()?.token
+            ?: throw IOException("Sign in with Google first.")
+    }
+) {
     companion object {
         const val BASE_URL = "https://create-ringtone.viktor-homelab.cloud"
     }
@@ -38,6 +46,7 @@ class RingtoneApi(private val baseUrl: String = BASE_URL) {
             connection.connectTimeout = 10_000
             connection.readTimeout = 30_000
             connection.instanceFollowRedirects = false
+            connection.setRequestProperty("Authorization", "Bearer ${idToken()}")
             if (body != null) {
                 connection.requestMethod = "POST"
                 connection.doOutput = true
@@ -62,15 +71,17 @@ class RingtoneApi(private val baseUrl: String = BASE_URL) {
         }
 
     suspend fun voices(): List<Voice> {
-        val voices = json("/voices").getJSONArray("voices")
-        return List(voices.length()) { index ->
-            val voice = voices.getJSONObject(index)
-            val clips = voice.getJSONArray("clips")
-            Voice(voice.getString("id"), voice.getString("name"), List(clips.length()) {
-                val clip = clips.getJSONObject(it)
-                VoiceClip(clip.getString("id"), clip.getString("name"))
-            })
-        }
+        val groups = json("/voices")
+        return groups.keys().asSequence().flatMap { category ->
+            val people = groups.getJSONObject(category)
+            people.keys().asSequence().map { contact ->
+                val clips = people.getJSONObject(contact).getJSONArray("clips")
+                Voice("$category:$contact", "$contact · $category", List(clips.length()) {
+                    val clip = clips.getJSONObject(it)
+                    VoiceClip(clip.getString("id"), clip.getString("name"))
+                })
+            }
+        }.toList()
     }
 
     suspend fun preview(voice: Voice, clip: VoiceClip, target: File) {
