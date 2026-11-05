@@ -1,6 +1,8 @@
 package com.example.ringtone_goofer
 
 import android.app.Application
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.tasks.await
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.MutableLiveData
@@ -35,9 +37,18 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     var clipId: String? = null
     private var generation: Job? = null
     private var loadingContacts = false
-    private var loadingVoices = false
+    private val auth = FirebaseAuth.getInstance()
+    private val voiceCache = VoiceCache(File(application.noBackupFilesDir, "voices"))
+    private var voiceUserId: String? = null
+    private var voiceLoad: Job? = null
+    private val authListener = FirebaseAuth.AuthStateListener { loadVoices() }
 
-    init { loadVoices() }
+    init { auth.addAuthStateListener(authListener) }
+
+    override fun onCleared() {
+        auth.removeAuthStateListener(authListener)
+        super.onCleared()
+    }
 
     fun loadContacts() {
         if (loadingContacts) return
@@ -56,16 +67,53 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun loadVoices() {
-        if (loadingVoices) return
-        loadingVoices = true
-        viewModelScope.launch {
+        val user = auth.currentUser
+        if (voiceUserId != user?.uid) {
+            voiceLoad?.cancel()
+            voiceUserId = user?.uid
+            voiceId = null
+            clipId = null
+            voices.value = emptyList()
+        }
+        if (user == null || voiceLoad?.isActive == true) return
+        voiceLoad = viewModelScope.launch {
+            // Pin this request to the captured user, even if the account changes while awaiting IO.
+            val client = RingtoneApi(idToken = {
+                user.getIdToken(false).await().token ?: error("Sign in with Google first.")
+            })
+            if (voices.value.isNullOrEmpty()) {
+                val cached = withContext(Dispatchers.IO) {
+                    try { voiceCache.read(user.uid)?.let(client::parseVoices) }
+                    catch (_: Exception) { null }
+                }
+                ensureActive()
+                if (auth.currentUser?.uid != user.uid) return@launch
+                cached?.let { voices.value = it }
+            }
             try {
-                voices.value = api.voices()
-                if (voices.value.isNullOrEmpty()) status.value = "The server has no voices."
+                val response = client.voicesJson()
+                val fresh = client.parseVoices(response)
+                ensureActive()
+                if (auth.currentUser?.uid != user.uid) return@launch
+                voices.value = fresh
+                try {
+                    withContext(Dispatchers.IO) { voiceCache.write(user.uid, response) }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    if (auth.currentUser?.uid == user.uid)
+                        status.value = "Voices refreshed, but could not save cache: ${e.message}"
+                    return@launch
+                }
+                ensureActive()
+                if (auth.currentUser?.uid == user.uid)
+                    status.value = if (fresh.isEmpty()) "The server has no voices." else "Voices refreshed."
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                status.value = "Cannot load voices: ${e.message}"
-            } finally { loadingVoices = false }
+                if (auth.currentUser?.uid == user.uid) {
+                    status.value = if (voices.value.isNullOrEmpty()) "Cannot load voices: ${e.message}"
+                        else "Cannot refresh voices; keeping saved voices: ${e.message}"
+                }
+            }
         }
     }
 

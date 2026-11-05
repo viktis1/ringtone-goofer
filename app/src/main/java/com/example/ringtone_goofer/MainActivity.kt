@@ -193,6 +193,13 @@ class MainActivity : AppCompatActivity() {
             updateControls()
         }
         model.voices.observe(this) {
+            stopAudio()
+            if (it.isEmpty()) {
+                model.voiceId = null
+                model.clipId = null
+                clipChoices = emptyList()
+                clipPicker.adapter = ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, emptyList())
+            }
             voiceChoices = it
             voicePicker.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, it.map(Voice::name))
             val index = it.indexOfFirst { voice -> voice.id == model.voiceId }.coerceAtLeast(0)

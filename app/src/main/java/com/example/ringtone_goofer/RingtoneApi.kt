@@ -70,8 +70,11 @@ class RingtoneApi(
             JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
         }
 
-    suspend fun voices(): List<Voice> {
-        val groups = json("/voices")
+    suspend fun voices(): List<Voice> = parseVoices(voicesJson())
+
+    suspend fun voicesJson(): JSONObject = json("/voices")
+
+    fun parseVoices(groups: JSONObject): List<Voice> {
         return groups.keys().asSequence().flatMap { category ->
             val people = groups.getJSONObject(category)
             people.keys().asSequence().map { contact ->
