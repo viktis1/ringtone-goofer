@@ -2,6 +2,7 @@ package com.example.ringtone_goofer
 
 import android.app.Application
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.tasks.await
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
@@ -117,7 +118,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun generate() {
+    fun generate(viaUpload: Boolean = false) {
         if (busy.value == true || recording.value == true) return
         val contact = selectedContact ?: return
         val voice = voices.value?.firstOrNull { it.id == voiceId } ?: return
@@ -129,7 +130,29 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         val work = PendingGeneration(GenerationRequest(UUID.randomUUID().toString(),
             contact.name, voice.id, clip.id), contact)
         generated.value = null
-        startGeneration(work)
+        if (viaUpload) uploadGeneration(work) else startGeneration(work)
+    }
+
+    private fun uploadGeneration(work: PendingGeneration) {
+        val user = auth.currentUser ?: run {
+            status.value = "Sign in before submitting a generation request."
+            return
+        }
+        busy.value = true
+        generation = viewModelScope.launch {
+            try {
+                status.value = "Uploading generation request…"
+                val bucket = getApplication<Application>().getString(R.string.generation_request_bucket_url)
+                RingtoneRequestUpload(FirebaseStorage.getInstance(bucket)).submit(user.uid, work.request)
+                status.value = "Generation request uploaded for ${work.contact.name}.\nJob: ${work.request.jobId}\nQueued for the server; no status monitoring on this route yet."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                status.value = "Generation upload failed: ${e.message}"
+            } finally {
+                busy.value = false
+            }
+        }
     }
 
     private fun startGeneration(work: PendingGeneration) {
@@ -177,7 +200,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
 
     fun cancel() {
         generation?.cancel()
-        status.value = "Stopped checking this job. The server may still finish it."
+        status.value = "Stopped local work. A submitted request may still finish on the server."
     }
 
     fun recordingFile(contact: AddressBookContact): File =

@@ -2,4 +2,5 @@
     <string name="app_name">ringtone-goofer</string>
     <!-- Set this to the bucket linked by google_firebase_storage_bucket.voice_upload. -->
     <string name="upload_bucket_url" translatable="false">gs://voice-upload-ringtone-k8s</string>
+    <string name="generation_request_bucket_url" translatable="false">gs://ringtone-generation-request-ringtone-k8s</string>
 </resources>

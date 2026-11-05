@@ -59,6 +59,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var voicePicker: Spinner
     private lateinit var clipPicker: Spinner
     private lateinit var generateButton: Button
+    private lateinit var generateUploadButton: Button
     private lateinit var previewButton: Button
     private lateinit var recordButton: Button
     private lateinit var playRecordingButton: Button
@@ -143,6 +144,10 @@ class MainActivity : AppCompatActivity() {
                 withPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE,
                     "Storage access is needed on this Android version to save a shared ringtone.") { model.generate() }
             } else model.generate()
+        }
+        generateUploadButton = button("Generate ringtone via upload") {
+            stopAudio()
+            model.generate(viaUpload = true)
         }
         cancelButton = button("Cancel job monitoring") { model.cancel() }
         assignButton = button("Assign downloaded ringtone to contact") {
@@ -239,6 +244,7 @@ class MainActivity : AppCompatActivity() {
         voicePicker.isEnabled = !busy
         clipPicker.isEnabled = !busy
         generateButton.isEnabled = !busy && contact != null && model.clipId != null
+        generateUploadButton.isEnabled = generateButton.isEnabled && auth.currentUser != null
         previewButton.isEnabled = !recording && model.clipId != null
         playContactButton.isEnabled = !recording && contact != null
         recordButton.text = if (recording) "Stop and save recording" else "Record audio for selected contact"
@@ -440,6 +446,7 @@ class MainActivity : AppCompatActivity() {
                 val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
                 auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
                 model.loadVoices()
+                updateControls()
             } catch (_: GetCredentialCancellationException) {
                 // Closing the account picker leaves the user signed out.
             } catch (e: CancellationException) {
