@@ -38,7 +38,11 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     private var loadingContacts = false
     private val draftWrites = Channel<Pair<String, RingtoneDraft>>(Channel.UNLIMITED)
     private val authListener = FirebaseAuth.AuthStateListener { restoreAccount() }
-    val selectedContact get() = contacts.value.orEmpty().firstOrNull { it.lookupUri.toString() == draft.value?.contactUri }
+    // Browsing contact audio is independent of the saved generation recipient.
+    private val contactPreferences = application.getSharedPreferences("contact-selection", 0)
+    val contactSelection = MutableLiveData("")
+    val selectedContact get() = contacts.value.orEmpty().firstOrNull { it.lookupUri.toString() == contactSelection.value }
+    val generationContact get() = contacts.value.orEmpty().firstOrNull { it.lookupUri.toString() == draft.value?.contactUri }
 
     init {
         // A single consumer preserves rapid contact/voice changes in exactly their UI order.
@@ -62,6 +66,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         voices.value = emptyList()
         draft.value = RingtoneDraft()
         loaded.value = false
+        contactSelection.value = contactPreferences.getString(auth.currentUser?.uid ?: "guest", "").orEmpty()
         val uid = auth.currentUser?.uid ?: run {
             status.value = "Sign in to save your selections and generate ringtones."
             return
@@ -100,6 +105,11 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
 
     fun selectContact(contact: AddressBookContact) {
         if (recording.value == true) return
+        contactSelection.value = contact.lookupUri.toString()
+        contactPreferences.edit().putString(auth.currentUser?.uid ?: "guest", contact.lookupUri.toString()).apply()
+    }
+
+    fun selectGenerationContact(contact: AddressBookContact) {
         saveDraft(draft.value!!.copy(contactUri = contact.lookupUri.toString(), contactName = contact.name))
     }
 
@@ -165,7 +175,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     fun generate() {
         if (saving.value == true || recording.value == true || loaded.value != true) return
         val uid = auth.currentUser?.uid ?: return
-        val contact = selectedContact ?: run { status.value = "Select an available contact first."; return }
+        val contact = generationContact ?: run { status.value = "Choose an available contact in Generate first."; return }
         val voice = voices.value.orEmpty().firstOrNull { it.id == draft.value?.voiceId } ?: return
         val clip = voice.clips.firstOrNull { it.id == draft.value?.clipId } ?: return
         if (contact.name.isBlank()) { status.value = "Give this contact a name first."; return }
@@ -175,7 +185,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         operation {
             library.put(item) // Commit the complete request before any network side effect.
             RingtoneWork.enqueue(getApplication(), item)
-            status.postValue("Generation saved. You can close the app and return to Ringtones.")
+            status.postValue("Generation saved. You can close the app and return to History.")
         }.invokeOnCompletion { saving.postValue(false) }
     }
 
@@ -266,7 +276,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
                 "", "Voice recording", "", original.name, stage = "uploading", recordingPath = snapshot.absolutePath)
             library.put(item)
             RingtoneWork.enqueue(getApplication(), item)
-            status.postValue("Upload saved. Track it in Ringtones, then refresh Voices after processing.")
+            status.postValue("Upload saved. Track it in History, then refresh voices in Generate after processing.")
         }
     }
 

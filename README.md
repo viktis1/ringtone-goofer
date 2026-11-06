@@ -4,10 +4,10 @@ An Android app for turning a contact and a voice sample into a personal ringtone
 
 ## Workflow
 
-1. Sign in with Google, open **Contacts**, grant contacts access, and select a person.
-2. In **Voices**, select a voice clip and listen to a preview.
+1. Sign in with Google, open **Generate**, and choose a recipient.
+2. Select a voice clip and listen to a preview in the same tab.
 3. Press **Generate ringtone**. The complete request is saved before submission.
-4. Open the item in **Ringtones** to track queue, script and audio stages.
+4. Open the item in **History** to track queue, script and audio stages.
 5. When ready, tap **Download ringtone**. The WAV is saved privately for offline listening.
 6. Tap **Listen**, then **Assign**. Assignment publishes the audio to Android's ringtone storage and updates the saved contact.
 
@@ -30,15 +30,15 @@ There is no backend cancellation endpoint. Closing the app or signing out does n
 
 ## Recordings
 
-**Contacts → Contact audio & voice recording** provides current-ringtone playback, recording, local playback and upload.
+**Contacts** provides visible current-ringtone playback, recording, local playback and upload controls. Select a contact to enable them; selection stays on this tab and does not change the recipient saved in Generate.
 
 Recording requires microphone access and stops/saves when the activity leaves the foreground. The format is mono, 44.1 kHz, 16-bit PCM WAV. A completed recording is written atomically, preserving the previous recording if capture fails. A killed process cannot continue microphone capture.
 
-Uploads use an immutable copy, a stable UUID in metadata and persistent background work. Refresh Voices after the server finishes ingesting a recording. The upload bucket and request bucket are configured in `strings.xml`.
+Uploads use an immutable copy, a stable UUID in metadata and persistent background work. Refresh voices in Generate after the server finishes ingesting a recording. The upload bucket and request bucket are configured in `strings.xml`.
 
 ## Code
 
-- `MainActivity.kt`: Contacts, Voices and Ringtones sections, permission prompts and account UI.
+- `MainActivity.kt`: Contacts, Generate and History sections, permission prompts and account UI.
 - `RingtoneViewModel.kt`: draft selection and user actions; no generation polling tied to the screen.
 - `RingtoneLibrary.kt`: SQLite persistence, account isolation, migration and private audio paths.
 - `RingtoneWork.kt`: unique, restartable WorkManager operations.
