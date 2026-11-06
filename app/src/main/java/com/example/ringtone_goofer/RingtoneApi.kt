@@ -14,7 +14,10 @@ import java.net.URLEncoder
 import kotlin.coroutines.coroutineContext
 
 data class VoiceClip(val id: String, val name: String)
-data class Voice(val id: String, val name: String, val clips: List<VoiceClip>)
+data class Voice(val id: String, val name: String, val clips: List<VoiceClip>) {
+    val category: String get() = id.substringBefore(':')
+    val displayName: String get() = id.substringAfter(':').replace('_', ' ')
+}
 data class GenerationRequest(
     val jobId: String, val caller: String, val voiceId: String, val clipId: String
 )

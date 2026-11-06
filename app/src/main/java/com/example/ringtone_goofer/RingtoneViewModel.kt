@@ -113,6 +113,12 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         saveDraft(draft.value!!.copy(contactUri = contact.lookupUri.toString(), contactName = contact.name))
     }
 
+    fun selectVoice(voice: Voice) {
+        if (draft.value?.voiceId != voice.id) {
+            saveDraft(draft.value!!.copy(voiceId = voice.id, clipId = ""))
+        }
+    }
+
     fun selectVoice(voice: Voice, clip: VoiceClip) {
         saveDraft(draft.value!!.copy(voiceId = voice.id, clipId = clip.id))
     }

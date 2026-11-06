@@ -67,6 +67,8 @@ class MainActivity : AppCompatActivity() {
     private var section = R.id.section_contacts
     private var previewFile: File? = null
     private var contactQuery = ""
+    private var voiceQuery = ""
+    private data class VoiceRow(val title: String, val voice: Voice? = null)
     private var previewTask: Job? = null
     private var refreshSection: (() -> Unit)? = null
     private var pendingPermission: String? = null
@@ -99,6 +101,7 @@ class MainActivity : AppCompatActivity() {
         section = savedSection.takeIf { it in setOf(R.id.section_contacts, R.id.section_voices, R.id.section_ringtones) }
             ?: R.id.section_contacts
         contactQuery = savedInstanceState?.getString("contactQuery").orEmpty()
+        voiceQuery = savedInstanceState?.getString("voiceQuery").orEmpty()
         pendingPermission = savedInstanceState?.getString("permission")
         pendingAction = savedInstanceState?.getString("action")
         pendingItem = savedInstanceState?.getString("item")
@@ -154,12 +157,14 @@ class MainActivity : AppCompatActivity() {
         val clip = voice?.clips?.firstOrNull { it.id == draft.clipId }
         summary.text = when {
             draft.contactUri.isBlank() -> "1 · Select a contact\nMake their next call sound personal."
-            clip == null -> "2 · Choose a voice\nFor ${draft.contactName}"
+            voice == null -> "2 · Choose a voice\nFor ${draft.contactName}"
+            clip == null -> "2 · Choose a clip\n${voice.displayName} · ${voice.category}"
             else -> "3 · Ready to generate\n${draft.contactName} · ${voice.name}\n${clip.name.substringAfterLast('/')}"
         }
         next.text = when {
             draft.contactUri.isBlank() -> "Select contact"
-            clip == null -> "Choose voice"
+            voice == null -> "Choose voice"
+            clip == null -> "Choose clip"
             else -> "Generate ringtone"
         }
         next.isEnabled = model.loaded.value == true && model.saving.value != true && model.recording.value != true
@@ -167,10 +172,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun nextStep() {
         val draft = model.draft.value ?: return
+        val voice = model.voices.value.orEmpty().firstOrNull { it.id == draft.voiceId }
         when {
             draft.contactUri.isBlank() -> chooseGenerationContact()
-            model.voices.value.orEmpty().none { it.id == draft.voiceId && it.clips.any { c -> c.id == draft.clipId } } ->
-                navigation.selectedItemId = R.id.section_voices
+            voice == null -> navigation.selectedItemId = R.id.section_voices
+            voice.clips.none { it.id == draft.clipId } -> showVoiceClips(voice)
             model.generationContact == null -> chooseGenerationContact()
             else -> { stopAudio(); model.generate(); navigation.selectedItemId = R.id.section_ringtones }
         }
@@ -275,24 +281,46 @@ class MainActivity : AppCompatActivity() {
         header.addView(button("Choose / change recipient") { chooseGenerationContact() })
         workflowHeader(header)
         header.addView(text("Choose a voice", 20))
-        header.addView(text("Select a clip, listen to a sample, then generate. Saved voices remain available while offline.", 14))
+        header.addView(text("Browse Public voices or Your Uploads. Tap a person to choose and preview their clips.", 14))
         header.addView(button("Refresh voices") { model.loadVoices() })
         header.addView(button("Listen to selected voice") { previewVoice() })
         header.addView(button("Stop audio") { stopAudio() })
+        val search = EditText(this).apply {
+            hint = "Search voices"
+            contentDescription = "Search voices"
+            setSingleLine()
+            setText(voiceQuery)
+        }
+        header.addView(search)
         val empty = text("", 14)
         header.addView(empty)
         list.addHeaderView(header, null, false)
-        var clips = emptyList<Pair<Voice, VoiceClip>>()
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                voiceQuery = s.toString()
+                refreshSection?.invoke()
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        var rows = emptyList<VoiceRow>()
         val adapter = object : BaseAdapter() {
-            override fun getCount() = clips.size
-            override fun getItem(position: Int) = clips[position]
-            override fun getItemId(position: Int) = clips[position].second.id.hashCode().toLong()
+            override fun getCount() = rows.size
+            override fun getItem(position: Int) = rows[position]
+            override fun getItemId(position: Int) = position.toLong()
+            override fun areAllItemsEnabled() = false
+            override fun isEnabled(position: Int) = rows[position].voice != null
             override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-                val (voice, clip) = clips[position]
-                val chosen = model.draft.value?.clipId == clip.id && model.draft.value?.voiceId == voice.id
+                val row = rows[position]
+                val voice = row.voice
                 return column(16).apply {
-                    addView(text((if (chosen) "✓  " else "") + voice.name, 17))
-                    addView(text(clip.name.substringAfterLast('/'), 14))
+                    val chosen = voice != null && model.draft.value?.voiceId == voice.id
+                    val title = text((if (chosen) "✓  " else "") + row.title, if (voice == null) 20 else 17)
+                    ViewCompat.setAccessibilityHeading(title, voice == null)
+                    addView(title)
+                    if (voice != null) addView(text(
+                        if (voice.clips.size == 1) "1 clip · Tap to choose"
+                        else "${voice.clips.size} clips · Tap to choose", 14))
                     if (chosen) setBackgroundColor(MaterialColors.layer(
                         MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurface),
                         MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary), 0.12f))
@@ -301,17 +329,57 @@ class MainActivity : AppCompatActivity() {
         }
         list.adapter = adapter
         list.setOnItemClickListener { _, _, position, _ ->
-            clips.getOrNull(position - list.headerViewsCount)?.let { (voice, clip) ->
-                stopAudio(); model.selectVoice(voice, clip)
+            rows.getOrNull(position - list.headerViewsCount)?.voice?.let { voice ->
+                stopAudio()
+                model.selectVoice(voice)
+                showVoiceClips(voice)
             }
         }
         refreshSection = {
-            clips = model.voices.value.orEmpty().flatMap { v -> v.clips.map { v to it } }
-            empty.text = if (clips.isEmpty()) "No voice clips loaded. Sign in and refresh, or record a sample from Contacts." else "${clips.size} voice clips"
+            val voices = model.voices.value.orEmpty()
+            val categories = listOf("Public", "Your Uploads") +
+                voices.map { it.category }.distinct().filterNot { it in setOf("Public", "Your Uploads") }.sorted()
+            rows = buildList {
+                for (category in categories) {
+                    val matches = voices.filter { it.category == category && it.displayName.contains(voiceQuery, ignoreCase = true) }
+                        .sortedBy { it.displayName.lowercase() }
+                    add(VoiceRow("$category (${matches.size})"))
+                    matches.forEach { add(VoiceRow(it.displayName, it)) }
+                }
+            }
+            empty.text = when {
+                voices.isEmpty() -> "No voices loaded. Sign in and refresh, or upload a recording from Contacts."
+                rows.none { it.voice != null } -> "No voices match your search."
+                else -> "Choose a voice below to see its clips."
+            }
             adapter.notifyDataSetChanged()
         }
         content.addView(list, LinearLayout.LayoutParams(-1, -1))
         refreshSection?.invoke()
+    }
+
+    private fun showVoiceClips(voice: Voice) {
+        if (voice.clips.isEmpty()) {
+            model.status.value = "No clips available for ${voice.displayName}."
+            return
+        }
+        val selected = voice.clips.indexOfFirst { it.id == model.draft.value?.clipId }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("${voice.displayName} · ${voice.category}")
+            .setSingleChoiceItems(voice.clips.map { it.name.substringAfterLast('/') }.toTypedArray(), selected) { chooser, index ->
+                stopAudio()
+                model.selectVoice(voice, voice.clips[index])
+                (chooser as AlertDialog).getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = true
+            }
+            .setPositiveButton("Done", null)
+            .setNeutralButton("Preview selected clip", null)
+            .create()
+        dialog.setOnDismissListener { stopAudio() }
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = selected >= 0
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { previewVoice() }
+        }
+        dialog.show()
     }
 
     private fun historyScreen() {
@@ -622,6 +690,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putInt("section", section); outState.putString("contactQuery", contactQuery)
+        outState.putString("voiceQuery", voiceQuery)
         outState.putString("permission", pendingPermission); outState.putString("action", pendingAction)
         outState.putString("item", pendingItem)
         super.onSaveInstanceState(outState)
