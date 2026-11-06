@@ -222,7 +222,9 @@ class MainActivity : AppCompatActivity() {
                     val chosen = model.draft.value?.contactUri == contact.lookupUri.toString()
                     addView(text((if (chosen) "✓  " else "") + contact.name.ifBlank { "Unnamed contact" }, 17))
                     addView(text(contact.ringtoneName, 13))
-                    if (chosen) setBackgroundColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurfaceVariant))
+                    if (chosen) setBackgroundColor(MaterialColors.layer(
+                        MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurface),
+                        MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary), 0.12f))
                 }
             }
         }
@@ -276,7 +278,9 @@ class MainActivity : AppCompatActivity() {
                 return column(16).apply {
                     addView(text((if (chosen) "✓  " else "") + voice.name, 17))
                     addView(text(clip.name.substringAfterLast('/'), 14))
-                    if (chosen) setBackgroundColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurfaceVariant))
+                    if (chosen) setBackgroundColor(MaterialColors.layer(
+                        MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurface),
+                        MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary), 0.12f))
                 }
             }
         }
