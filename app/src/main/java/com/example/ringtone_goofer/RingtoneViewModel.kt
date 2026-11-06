@@ -29,6 +29,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     val voiceRefreshError = MutableLiveData<String?>(null)
     val refreshingVoices = MutableLiveData(false)
     val items = MutableLiveData<List<RingtoneItem>>(emptyList())
+    internal val callHistory = MutableLiveData<List<CallHistoryEntry>>(emptyList())
     val draft = MutableLiveData(RingtoneDraft())
     val status = MutableLiveData("Choose a contact to get started.")
     val recording = MutableLiveData(false)
@@ -51,6 +52,12 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     val generationContact get() = contacts.value.orEmpty().firstOrNull { it.lookupUri.toString() == draft.value?.contactUri }
 
     init {
+        viewModelScope.launch {
+            val calls = IncomingCallHistory.get(application)
+            calls.revision.collect {
+                callHistory.value = withContext(Dispatchers.IO) { calls.entries() }
+            }
+        }
         // A single consumer preserves rapid contact/voice changes in exactly their UI order.
         viewModelScope.launch(Dispatchers.IO) {
             for ((uid, value) in draftWrites) {

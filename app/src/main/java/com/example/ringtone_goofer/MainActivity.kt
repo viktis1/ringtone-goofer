@@ -39,7 +39,7 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.io.File
 
-internal enum class ScreenAction { CONTACTS, RECIPIENT, RECORD, GENERATE, ASSIGN, ASSIGNMENT_CONTACT }
+internal enum class ScreenAction { CONTACTS, RECIPIENT, RECORD, GENERATE, ASSIGN, ASSIGNMENT_CONTACT, CALL_HISTORY }
 
 /** Navigation, account sign-in, permission results, and screen lifecycle. */
 class MainActivity : AppCompatActivity() {
@@ -123,7 +123,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(root)
         showSection(section)
         listOf(model.contactSelection, model.draft, model.voices, model.voiceRefreshError,
-            model.contacts, model.items, model.loaded, model.saving, model.recording,
+            model.contacts, model.items, model.callHistory, model.loaded, model.saving, model.recording,
             model.stoppingRecording).forEach { state ->
             state.observe(this) { currentScreen?.refresh?.invoke() }
         }
@@ -162,6 +162,8 @@ class MainActivity : AppCompatActivity() {
 
     internal fun runAction(action: ScreenAction, id: String? = null) {
         val permissions = when (action) {
+            ScreenAction.CALL_HISTORY -> listOf(Manifest.permission.READ_PHONE_STATE,
+                Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CONTACTS)
             ScreenAction.RECORD -> listOf(Manifest.permission.RECORD_AUDIO)
             ScreenAction.GENERATE, ScreenAction.ASSIGN -> listOfNotNull(
                 Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS,
@@ -176,6 +178,8 @@ class MainActivity : AppCompatActivity() {
         }
         if (shouldShowRequestPermissionRationale(permission)) {
             val reason = when (permission) {
+                Manifest.permission.READ_PHONE_STATE -> "Phone access lets History record incoming calls after they end."
+                Manifest.permission.READ_CALL_LOG -> "Call log access lets History identify the caller. Your installer must allow this permission."
                 Manifest.permission.READ_CONTACTS -> "Contacts access lets you choose a person and resolve their saved contact."
                 Manifest.permission.WRITE_CONTACTS -> "Allow contact updates to set this person's ringtone."
                 Manifest.permission.RECORD_AUDIO -> "Microphone access is used only while recording a voice sample."
@@ -199,6 +203,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         when (action) {
+            ScreenAction.CALL_HISTORY -> { model.status.value = "Incoming call history enabled. Calls update History without generation."; currentScreen?.refresh?.invoke() }
             ScreenAction.CONTACTS -> model.loadContacts()
             ScreenAction.RECIPIENT -> generateTab.chooseGenerationContact()
             ScreenAction.GENERATE -> {
@@ -260,6 +265,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (::model.isInitialized && hasPermission(Manifest.permission.READ_CONTACTS)) model.loadContacts()
+        currentScreen?.refresh?.invoke()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

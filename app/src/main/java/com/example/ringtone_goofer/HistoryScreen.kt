@@ -20,6 +20,10 @@ internal class HistoryScreen(activity: MainActivity) : TabScreen(activity) {
         val header = column(16)
         header.addView(text("History", 22))
         activity.statusHeader(header)
+        val enableCalls = button("Enable incoming call history") { activity.runAction(ScreenAction.CALL_HISTORY) }
+        header.addView(enableCalls)
+        val calls = column()
+        header.addView(calls)
         header.addView(text("Generation and downloads continue in the background. Tap an item to download, listen or assign.", 14))
         val empty = text("", 14)
         header.addView(empty)
@@ -39,6 +43,14 @@ internal class HistoryScreen(activity: MainActivity) : TabScreen(activity) {
             adapter.items.getOrNull(position - list.headerViewsCount)?.let(::showItem)
         }
         refresh = {
+            enableCalls.visibility = if (activity.hasPermission(Manifest.permission.READ_PHONE_STATE) &&
+                activity.hasPermission(Manifest.permission.READ_CALL_LOG)) View.GONE else View.VISIBLE
+            calls.removeAllViews()
+            model.callHistory.value.orEmpty().forEach { entry ->
+                calls.addView(text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                    .format(Date(entry.received)), 13))
+                calls.addView(text(entry.message, 16))
+            }
             val rows = model.items.value.orEmpty()
             adapter.items = rows
             empty.text = if (rows.isEmpty()) "Your generated ringtones and uploads will appear here. Create a ringtone in Generate."
