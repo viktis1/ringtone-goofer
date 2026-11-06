@@ -25,6 +25,8 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     private val voiceCache = VoiceCache(File(application.noBackupFilesDir, "voices"))
     val contacts = MutableLiveData<List<AddressBookContact>>(emptyList())
     val voices = MutableLiveData<List<Voice>>(emptyList())
+    val voiceRefreshError = MutableLiveData<String?>(null)
+    val refreshingVoices = MutableLiveData(false)
     val items = MutableLiveData<List<RingtoneItem>>(emptyList())
     val draft = MutableLiveData(RingtoneDraft())
     val status = MutableLiveData("Choose a contact to get started.")
@@ -42,6 +44,9 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     private val contactPreferences = application.getSharedPreferences("contact-selection", 0)
     val contactSelection = MutableLiveData("")
     val selectedContact get() = contacts.value.orEmpty().firstOrNull { it.lookupUri.toString() == contactSelection.value }
+    val availableVoices get() = voices.value.orEmpty().filter {
+        it.isAvailableForRecipient(draft.value?.contactName.orEmpty())
+    }
     val generationContact get() = contacts.value.orEmpty().firstOrNull { it.lookupUri.toString() == draft.value?.contactUri }
 
     init {
@@ -61,6 +66,8 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     private fun restoreAccount() {
         accountLoad?.cancel()
         voiceLoad?.cancel()
+        voiceRefreshError.value = null
+        refreshingVoices.value = false
         stopRecording()
         items.value = emptyList()
         voices.value = emptyList()
@@ -113,16 +120,22 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun selectGenerationContact(contact: AddressBookContact) {
-        saveDraft(draft.value!!.copy(contactUri = contact.lookupUri.toString(), contactName = contact.name))
+        val current = draft.value ?: return
+        val keepVoice = Voice(current.voiceId, "", emptyList()).isAvailableForRecipient(contact.name)
+        saveDraft(current.copy(contactUri = contact.lookupUri.toString(), contactName = contact.name,
+            voiceId = if (keepVoice) current.voiceId else "",
+            clipId = if (keepVoice) current.clipId else ""))
     }
 
     fun selectVoice(voice: Voice) {
+        if (!voice.isAvailableForRecipient(draft.value?.contactName.orEmpty())) return
         if (draft.value?.voiceId != voice.id) {
             saveDraft(draft.value!!.copy(voiceId = voice.id, clipId = ""))
         }
     }
 
     fun selectVoice(voice: Voice, clip: VoiceClip) {
+        if (!voice.isAvailableForRecipient(draft.value?.contactName.orEmpty())) return
         saveDraft(draft.value!!.copy(voiceId = voice.id, clipId = clip.id))
     }
 
@@ -156,8 +169,13 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun loadVoices() {
-        val user = auth.currentUser ?: return
+        val user = auth.currentUser ?: run {
+            voiceRefreshError.value = "Voices couldn't be refreshed. Sign in and try again."
+            return
+        }
         if (voiceLoad?.isActive == true) return
+        voiceRefreshError.value = null
+        refreshingVoices.value = true
         voiceLoad = viewModelScope.launch {
             val client = RingtoneApi(idToken = {
                 check(auth.currentUser?.uid == user.uid) { "Account changed" }
@@ -175,8 +193,10 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
                 if (fresh.isEmpty()) status.value = "No voices available. Upload a recording or refresh later."
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                status.value = if (voices.value.isNullOrEmpty()) "Cannot load voices: ${e.message}"
-                    else "Using saved voices. Refresh unavailable: ${e.message}"
+                voiceRefreshError.value = "Voices couldn't be refreshed. Check your connection and try again." +
+                    if (voices.value.isNullOrEmpty()) "" else " Your saved voices are still available."
+            } finally {
+                refreshingVoices.value = false
             }
         }
     }
@@ -185,7 +205,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         if (saving.value == true || recording.value == true || loaded.value != true) return
         val uid = auth.currentUser?.uid ?: return
         val contact = generationContact ?: run { status.value = "Choose an available contact in Generate first."; return }
-        val voice = voices.value.orEmpty().firstOrNull { it.id == draft.value?.voiceId } ?: return
+        val voice = availableVoices.firstOrNull { it.id == draft.value?.voiceId } ?: return
         val clip = voice.clips.firstOrNull { it.id == draft.value?.clipId } ?: return
         if (contact.name.isBlank()) { status.value = "Give this contact a name first."; return }
         val item = RingtoneItem(UUID.randomUUID().toString(), uid, contact.lookupUri.toString(),

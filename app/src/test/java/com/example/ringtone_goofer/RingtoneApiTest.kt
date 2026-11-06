@@ -35,6 +35,20 @@ class RingtoneApiTest {
         }
     }
 
+    @Test fun recipientCanChoosePublicVoicesAndOnlyTheirOwnUploads() {
+        fun voice(id: String) = Voice(id, id, emptyList())
+        assertTrue(voice("Public:Alex").isAvailableForRecipient("Mille"))
+        assertTrue(voice("Public:Alex").isAvailableForRecipient(""))
+        assertTrue(voice("Your Uploads:Mille").isAvailableForRecipient("Mille"))
+        assertTrue(voice("Your Uploads:mille").isAvailableForRecipient(" Mille "))
+        assertTrue(voice("Your Uploads:John-Smith").isAvailableForRecipient("John Smith"))
+        assertTrue(voice("Your Uploads:Søren_Åberg").isAvailableForRecipient("Søren Åberg"))
+        assertFalse(voice("Your Uploads:Alex").isAvailableForRecipient("Mille"))
+        assertFalse(voice("Your Uploads:Mille Jensen").isAvailableForRecipient("Mille"))
+        assertFalse(voice("Your Uploads:Mille").isAvailableForRecipient(""))
+        assertFalse(voice("Other:Mille").isAvailableForRecipient("Mille"))
+    }
+
     @Test fun voicesParseGroupsAndKeepClipUuids() = runBlocking {
         val uuid = "12345678-1234-4234-8234-123456789abc"
         respond("/voices", """{"Public":{"Alex":{"clips":[{"id":"$uuid","name":"public/Alex.wav"}]}},"Your Uploads":{"Alex":{"clips":[]}}}""")

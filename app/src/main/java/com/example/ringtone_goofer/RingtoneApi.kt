@@ -17,6 +17,16 @@ data class VoiceClip(val id: String, val name: String)
 data class Voice(val id: String, val name: String, val clips: List<VoiceClip>) {
     val category: String get() = id.substringBefore(':')
     val displayName: String get() = id.substringAfter(':').replace('_', ' ')
+
+    fun isAvailableForRecipient(contactName: String): Boolean {
+        if (category == "Public") return true
+        if (category != "Your Uploads" || contactName.isBlank()) return false
+        fun normalized(name: String) = name.trim().replace(Regex("[\\s_-]+"), " ")
+        val person = normalized(id.substringAfter(':'))
+        val uploadName = contactRecordingFile(File("."), contactName).nameWithoutExtension
+        return person.equals(normalized(contactName), ignoreCase = true) ||
+            person.equals(normalized(uploadName), ignoreCase = true)
+    }
 }
 data class GenerationRequest(
     val jobId: String, val caller: String, val voiceId: String, val clipId: String

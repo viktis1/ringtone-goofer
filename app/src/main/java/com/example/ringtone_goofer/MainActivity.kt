@@ -59,7 +59,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var model: RingtoneViewModel
     private lateinit var audio: AudioPreview
     private lateinit var content: LinearLayout
-    private lateinit var summary: TextView
+    private lateinit var recipientButton: Button
+    private lateinit var voiceButton: Button
     private lateinit var next: Button
     private lateinit var status: TextView
     private lateinit var signInButton: Button
@@ -141,6 +142,7 @@ class MainActivity : AppCompatActivity() {
         model.contactSelection.observe(this) { if (section == R.id.section_contacts) refreshSection?.invoke() }
         model.draft.observe(this) { updateSummary(); refreshSection?.invoke() }
         model.voices.observe(this) { updateSummary(); if (section == R.id.section_voices) refreshSection?.invoke() }
+        model.voiceRefreshError.observe(this) { if (section == R.id.section_voices) refreshSection?.invoke() }
         model.contacts.observe(this) { updateSummary(); if (section == R.id.section_contacts) refreshSection?.invoke() }
         model.items.observe(this) { if (section == R.id.section_ringtones) refreshSection?.invoke() }
         model.loaded.observe(this) { updateSummary(); updateAccount() }
@@ -160,29 +162,26 @@ class MainActivity : AppCompatActivity() {
     private fun updateSummary() {
         if (section != R.id.section_voices) return
         val draft = model.draft.value ?: RingtoneDraft()
-        val voice = model.voices.value.orEmpty().firstOrNull { it.id == draft.voiceId }
+        val voice = model.availableVoices.firstOrNull { it.id == draft.voiceId }
         val clip = voice?.clips?.firstOrNull { it.id == draft.clipId }
-        summary.text = when {
-            draft.contactUri.isBlank() -> "1 · Select a contact\nMake their next call sound personal."
-            voice == null -> "2 · Choose a voice\nFor ${draft.contactName}"
-            clip == null -> "2 · Choose a clip\n${voice.displayName} · ${voice.category}"
-            else -> "3 · Ready to generate\n${draft.contactName} · ${voice.name}\n${clip.name.substringAfterLast('/')}"
+        recipientButton.text = if (draft.contactUri.isBlank()) "Choose / change recipient"
+            else "✓  Recipient: ${draft.contactName}\nTap to change"
+        voiceButton.text = when {
+            voice == null -> "Choose a voice"
+            clip == null -> "Voice: ${voice.displayName}\nChoose a clip"
+            else -> "✓  Voice: ${voice.displayName}\n${clip.name.substringAfterLast('/')} · Tap to change"
         }
-        next.text = when {
-            draft.contactUri.isBlank() -> "Select contact"
-            voice == null -> "Choose voice"
-            clip == null -> "Choose clip"
-            else -> "Generate & set ringtone"
-        }
-        next.isEnabled = model.loaded.value == true && model.saving.value != true && model.recording.value != true
+        next.text = "Generate & set ringtone"
+        next.isEnabled = model.loaded.value == true && model.saving.value != true &&
+            model.recording.value != true && draft.contactUri.isNotBlank() && clip != null
     }
 
     private fun nextStep() {
         val draft = model.draft.value ?: return
-        val voice = model.voices.value.orEmpty().firstOrNull { it.id == draft.voiceId }
+        val voice = model.availableVoices.firstOrNull { it.id == draft.voiceId }
         when {
             draft.contactUri.isBlank() -> chooseGenerationContact()
-            voice == null -> navigation.selectedItemId = R.id.section_voices
+            voice == null -> chooseVoice()
             voice.clips.none { it.id == draft.clipId } -> showVoiceClips(voice)
             model.generationContact == null -> chooseGenerationContact()
             else -> requestGeneration()
@@ -330,16 +329,39 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun generateScreen() {
+        val body = column(16)
+        val error = voiceRefreshBanner()
+        body.addView(error)
+        body.addView(text("Generate", 22))
+        statusHeader(body)
+        recipientButton = secondaryButton("Choose / change recipient") { chooseGenerationContact() }
+        voiceButton = secondaryButton("Choose a voice") { chooseVoice() }
+        body.addView(recipientButton)
+        body.addView(voiceButton)
+        next = button("Generate & set ringtone") { nextStep() }
+        body.addView(next)
+        refreshSection = { updateVoiceRefreshBanner(error) }
+        content.addView(android.widget.ScrollView(this).apply { addView(body) }, LinearLayout.LayoutParams(-1, -1))
+        refreshSection?.invoke()
+    }
+
+    private fun voiceRefreshBanner() = text("", 14).apply {
+        setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorError))
+        accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+    }
+
+    private fun updateVoiceRefreshBanner(banner: TextView) {
+        val message = model.voiceRefreshError.value
+        banner.text = message?.let { "✕  $it" }.orEmpty()
+        banner.visibility = if (message == null) View.GONE else View.VISIBLE
+    }
+
+    private fun chooseVoice() {
         val list = ListView(this).apply { divider = null }
         val header = column(16)
-        header.addView(text("Generate", 22))
-        header.addView(button("Choose / change recipient") { chooseGenerationContact() })
-        workflowHeader(header)
-        header.addView(text("Choose a voice", 20))
-        header.addView(text("Browse Public voices or Your Uploads. Tap a person to choose and preview their clips.", 14))
-        header.addView(button("Refresh voices") { model.loadVoices() })
-        header.addView(button("Listen to selected voice") { previewVoice() })
-        header.addView(button("Stop audio") { stopAudio() })
+        val error = voiceRefreshBanner()
+        header.addView(error)
+        header.addView(text("Choose a Public voice or an upload matching your recipient. Tap a person to choose and preview their clips.", 14))
         val search = EditText(this).apply {
             hint = "Search voices"
             contentDescription = "Search voices"
@@ -350,11 +372,12 @@ class MainActivity : AppCompatActivity() {
         val empty = text("", 14)
         header.addView(empty)
         list.addHeaderView(header, null, false)
+        var refreshPicker: () -> Unit = {}
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 voiceQuery = s.toString()
-                refreshSection?.invoke()
+                refreshPicker()
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
@@ -390,9 +413,10 @@ class MainActivity : AppCompatActivity() {
                 showVoiceClips(voice)
             }
         }
-        refreshSection = {
-            val voices = model.voices.value.orEmpty()
-            val categories = listOf("Public", "Your Uploads") +
+        refreshPicker = {
+            updateVoiceRefreshBanner(error)
+            val voices = model.availableVoices
+            val categories = listOf("Your Uploads", "Public") +
                 voices.map { it.category }.distinct().filterNot { it in setOf("Public", "Your Uploads") }.sorted()
             rows = buildList {
                 for (category in categories) {
@@ -403,14 +427,34 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             empty.text = when {
+                model.refreshingVoices.value == true -> "Refreshing voices…"
                 voices.isEmpty() -> "No voices loaded. Sign in and refresh, or upload a recording from Contacts."
                 rows.none { it.voice != null } -> "No voices match your search."
                 else -> "Choose a voice below to see its clips."
             }
             adapter.notifyDataSetChanged()
         }
-        content.addView(list, LinearLayout.LayoutParams(-1, -1))
-        refreshSection?.invoke()
+        val dialog = AlertDialog.Builder(this).setTitle("Choose a voice")
+            .setView(list).setPositiveButton("Done", null).create()
+        val voicesObserver = Observer<List<Voice>> { refreshPicker() }
+        val draftObserver = Observer<RingtoneDraft> { refreshPicker() }
+        val errorObserver = Observer<String?> { refreshPicker() }
+        val loadingObserver = Observer<Boolean> { refreshPicker() }
+        model.voices.observe(this, voicesObserver)
+        model.draft.observe(this, draftObserver)
+        model.voiceRefreshError.observe(this, errorObserver)
+        model.refreshingVoices.observe(this, loadingObserver)
+        dialog.setOnDismissListener {
+            stopAudio()
+            model.voices.removeObserver(voicesObserver)
+            model.draft.removeObserver(draftObserver)
+            model.voiceRefreshError.removeObserver(errorObserver)
+            model.refreshingVoices.removeObserver(loadingObserver)
+        }
+        dialog.show()
+        dialog.window?.setLayout(-1, (resources.displayMetrics.heightPixels * 0.8f).toInt())
+        refreshPicker()
+        model.loadVoices()
     }
 
     private fun showVoiceClips(voice: Voice) {
@@ -550,7 +594,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun previewVoice() {
         if (model.recording.value == true) return
-        val voice = model.voices.value.orEmpty().firstOrNull { it.id == model.draft.value?.voiceId } ?: return
+        val voice = model.availableVoices.firstOrNull { it.id == model.draft.value?.voiceId } ?: return
         val clip = voice.clips.firstOrNull { it.id == model.draft.value?.clipId } ?: return
         stopAudio()
         model.status.value = "Loading voice sample…"
@@ -714,20 +758,6 @@ class MainActivity : AppCompatActivity() {
         previewTask?.cancel(); previewTask = null
         audio.stop()
         previewFile?.delete(); previewFile = null
-    }
-
-    /** The draft scrolls with each section, leaving room on small and landscape windows. */
-    private fun workflowHeader(header: LinearLayout) {
-        val card = MaterialCardView(this).apply {
-            radius = dp(16).toFloat(); cardElevation = 0f; strokeWidth = dp(1)
-        }
-        val body = column(12)
-        summary = text("", 16)
-        next = button("", ::nextStep)
-        body.addView(summary); body.addView(next)
-        card.addView(body)
-        header.addView(card)
-        statusHeader(header)
     }
 
     private fun statusHeader(header: LinearLayout) {
