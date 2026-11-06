@@ -61,7 +61,11 @@ class RingtoneWorker(context: Context, params: WorkerParameters) : CoroutineWork
         val action = inputData.getString("action") ?: return@withContext Result.failure()
         val library = RingtoneLibrary.get(applicationContext)
         var item = library.get(uid, id) ?: return@withContext Result.success()
-        if (RingtoneWork.action(item) != action) return@withContext Result.success()
+        if (RingtoneWork.action(item) != action) {
+            // A process can stop after committing the next stage but before scheduling it.
+            RingtoneWork.enqueue(applicationContext, item)
+            return@withContext Result.success()
+        }
         val auth = FirebaseAuth.getInstance()
         val user = auth.currentUser
         if (user?.uid != uid) {
@@ -87,7 +91,10 @@ class RingtoneWorker(context: Context, params: WorkerParameters) : CoroutineWork
                         status = { job -> checkAccount(); api.status(job) },
                         save = { change -> library.update(uid, id, change) },
                         pause = { delay(4_000) })
-                    if (finished) Result.success() else Result.retry()
+                    if (finished) {
+                        library.get(uid, id)?.let { RingtoneWork.enqueue(applicationContext, it) }
+                        Result.success()
+                    } else Result.retry()
                 }
                 "download" -> {
                     val target = library.audioFile(applicationContext, item)
@@ -97,14 +104,21 @@ class RingtoneWorker(context: Context, params: WorkerParameters) : CoroutineWork
                         api.download(item.serverJob(), partial)
                         ensureActive()
                         check(partial.renameTo(target)) { "Cannot save downloaded ringtone" }
-                        library.update(uid, id) { it.copy(stage = "downloaded", detail = "", resumeStage = "") }
+                        item = library.update(uid, id) { it.afterDownload() }
                     } finally { partial.delete() }
+                    RingtoneWork.enqueue(applicationContext, item)
                     Result.success()
                 }
                 "assign" -> {
                     val file = library.audioFile(applicationContext, item)
                     check(file.isFile) { "Downloaded audio is missing. Download it again." }
                     check(item.contactUri.isNotBlank()) { "Choose an assignment contact first." }
+                    for (permission in listOf(android.Manifest.permission.READ_CONTACTS, android.Manifest.permission.WRITE_CONTACTS)) {
+                        check(androidx.core.content.ContextCompat.checkSelfPermission(applicationContext, permission) ==
+                            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            "Ringtone downloaded. Allow contacts access and retry to finish automatic assignment."
+                        }
+                    }
                     val store = ContactRingtoneStore(applicationContext)
                     // saveWav reuses an already published row after a process interruption.
                     val media = store.saveWav(file, item.id, item.contactName)

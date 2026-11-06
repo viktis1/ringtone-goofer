@@ -30,6 +30,13 @@ data class RingtoneItem(
 ) {
     fun serverJob() = GenerationJob(id.replace("-", ""), statusUrl, downloadUrl, stage)
     fun request() = GenerationRequest(id, contactName, voiceId, clipId)
+
+    /** Persist assignment intent with the original target before scheduling the next worker. */
+    fun afterDownload() = copy(
+        stage = if (contactUri.isNotBlank()) "assigning" else "downloaded",
+        detail = if (contactUri.isBlank()) "Downloaded. Choose a contact to finish assignment." else "",
+        resumeStage = ""
+    )
     val active get() = stage in setOf("submitting", "awaiting_worker", "queued", "running", "downloading", "assigning", "uploading")
     val label get() = when (stage) {
         "submitting" -> "Waiting to submit"

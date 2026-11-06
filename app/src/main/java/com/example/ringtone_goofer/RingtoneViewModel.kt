@@ -85,7 +85,10 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
                     val rows = withContext(Dispatchers.IO) { library.items(uid) }
                     ensureActive()
                     if (auth.currentUser?.uid != uid) return@collect
+                    val previous = items.value.orEmpty().associateBy { it.id }
+                    val assignmentChanged = rows.any { it.stage == "assigned" && previous[it.id] != it }
                     items.value = rows
+                    if (assignmentChanged) loadContacts()
                     // Repairs the tiny gap between saving an intent and enqueueing WorkManager.
                     rows.filter { it.active }.forEach { RingtoneWork.enqueue(getApplication(), it) }
                 }

@@ -172,7 +172,7 @@ class MainActivity : AppCompatActivity() {
             draft.contactUri.isBlank() -> "Select contact"
             voice == null -> "Choose voice"
             clip == null -> "Choose clip"
-            else -> "Generate ringtone"
+            else -> "Generate & set ringtone"
         }
         next.isEnabled = model.loaded.value == true && model.saving.value != true && model.recording.value != true
     }
@@ -185,8 +185,12 @@ class MainActivity : AppCompatActivity() {
             voice == null -> navigation.selectedItemId = R.id.section_voices
             voice.clips.none { it.id == draft.clipId } -> showVoiceClips(voice)
             model.generationContact == null -> chooseGenerationContact()
-            else -> { stopAudio(); model.generate(); navigation.selectedItemId = R.id.section_ringtones }
+            else -> requestGeneration()
         }
+    }
+
+    private fun requestGeneration(id: String? = null) {
+        request(Manifest.permission.READ_CONTACTS, "generateRead", id)
     }
 
     private fun showSection(value: Int) {
@@ -210,29 +214,6 @@ class MainActivity : AppCompatActivity() {
         header.addView(text("Select a contact to manage their ringtone and voice recordings.", 14))
         statusHeader(header)
         header.addView(button("Load / refresh contacts") { request(Manifest.permission.READ_CONTACTS, "contacts") })
-        val selected = text("", 15)
-        val tools = button("Record voice sample") {
-            if (model.recording.value == true) model.stopRecording() else requestRecording()
-        }
-        val listenRingtone = button("Listen to current ringtone") {
-            if (contactPlayback == ContactPlayback.RINGTONE) {
-                stopAudio()
-            } else model.selectedContact?.let {
-                stopAudio()
-                audio.playContact(it)
-                if (audio.isActive) contactPlayback = ContactPlayback.RINGTONE
-                refreshSection?.invoke()
-            }
-        }
-        val listenRecording = button("Listen to saved recording") {
-            if (contactPlayback == ContactPlayback.RECORDING) stopAudio() else playRecording()
-        }
-        val upload = button("Upload saved recording") { model.uploadRecording() }
-        header.addView(selected)
-        header.addView(tools)
-        header.addView(listenRingtone)
-        header.addView(listenRecording)
-        header.addView(upload)
         val search = EditText(this).apply {
             hint = "Search contacts"
             setSingleLine()
@@ -242,7 +223,16 @@ class MainActivity : AppCompatActivity() {
         header.addView(search)
         list.addHeaderView(header, null, false)
         var filtered = emptyList<AddressBookContact>()
-        // Use a two-line adapter so the assigned ringtone stays visible under each name.
+        var expandedContact = if (model.recording.value == true) model.contactSelection.value else null
+        val toggleContact: (AddressBookContact) -> Unit = { contact ->
+            if (model.recording.value != true && model.stoppingRecording.value != true) {
+                stopAudio()
+                val uri = contact.lookupUri.toString()
+                expandedContact = if (expandedContact == uri) null else uri
+                model.selectContact(contact)
+                refreshSection?.invoke()
+            }
+        }
         val rows = object : BaseAdapter() {
             override fun getCount() = filtered.size
             override fun getItem(position: Int) = filtered[position]
@@ -251,8 +241,45 @@ class MainActivity : AppCompatActivity() {
                 val contact = filtered[position]
                 return column(16).apply {
                     val chosen = model.contactSelection.value == contact.lookupUri.toString()
-                    addView(text((if (chosen) "✓  " else "") + contact.name.ifBlank { "Unnamed contact" }, 17))
+                    val expanded = expandedContact == contact.lookupUri.toString() && chosen
+                    addView(button((if (expanded) "▾  " else "▸  ") + contact.name.ifBlank { "Unnamed contact" }) {
+                        toggleContact(contact)
+                    }.apply {
+                        ViewCompat.setStateDescription(this, if (expanded) "Expanded" else "Collapsed")
+                    })
                     addView(text(contact.ringtoneName, 13))
+                    if (expanded) {
+                        val tools = button("Record voice sample") {
+                            if (model.recording.value == true) model.stopRecording() else requestRecording()
+                        }
+                        val listenRingtone = button("Listen to current ringtone") {
+                            if (contactPlayback == ContactPlayback.RINGTONE) {
+                                stopAudio()
+                            } else model.selectedContact?.let {
+                                stopAudio()
+                                audio.playContact(it)
+                                if (audio.isActive) contactPlayback = ContactPlayback.RINGTONE
+                                refreshSection?.invoke()
+                            }
+                        }
+                        val listenRecording = button("Listen to saved recording") {
+                            if (contactPlayback == ContactPlayback.RECORDING) stopAudio() else playRecording()
+                        }
+                        val upload = button("Upload saved recording") { model.uploadRecording() }
+                        val recording = model.recording.value == true
+                        tools.text = if (recording) "Stop and save recording" else "Record voice sample"
+                        val playing = contactPlayback != null
+                        listenRingtone.text = if (contactPlayback == ContactPlayback.RINGTONE) "Stop audio" else "Listen to current ringtone"
+                        listenRecording.text = if (contactPlayback == ContactPlayback.RECORDING) "Stop audio" else "Listen to saved recording"
+                        tools.isEnabled = !playing && model.stoppingRecording.value != true
+                        listenRingtone.isEnabled = !recording && (contactPlayback == ContactPlayback.RINGTONE || !playing)
+                        listenRecording.isEnabled = !recording && (contactPlayback == ContactPlayback.RECORDING || !playing)
+                        upload.isEnabled = !recording && !playing && auth.currentUser != null
+                        addView(tools)
+                        addView(listenRingtone)
+                        addView(listenRecording)
+                        addView(upload)
+                    }
                     if (chosen) setBackgroundColor(MaterialColors.layer(
                         MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurface),
                         MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary), 0.12f))
@@ -263,18 +290,7 @@ class MainActivity : AppCompatActivity() {
         refreshSection = {
             filtered = model.contacts.value.orEmpty().filter { it.name.contains(contactQuery, ignoreCase = true) }
             rows.notifyDataSetChanged()
-            val contact = model.selectedContact
-            val recording = model.recording.value == true
-            selected.text = contact?.let { "Selected: ${it.name}\n${it.ringtoneName}" +
-                if (recording) "\nRecording…" else "" } ?: "Select a contact below to enable audio controls."
-            tools.text = if (recording) "Stop and save recording" else "Record voice sample"
-            val playing = contactPlayback != null
-            listenRingtone.text = if (contactPlayback == ContactPlayback.RINGTONE) "Stop audio" else "Listen to current ringtone"
-            listenRecording.text = if (contactPlayback == ContactPlayback.RECORDING) "Stop audio" else "Listen to saved recording"
-            tools.isEnabled = contact != null && !playing && model.stoppingRecording.value != true
-            listenRingtone.isEnabled = !recording && (contactPlayback == ContactPlayback.RINGTONE || (contact != null && !playing))
-            listenRecording.isEnabled = !recording && (contactPlayback == ContactPlayback.RECORDING || (contact != null && !playing))
-            upload.isEnabled = contact != null && !recording && !playing && auth.currentUser != null
+
         }
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -285,8 +301,7 @@ class MainActivity : AppCompatActivity() {
         })
         list.setOnItemClickListener { _, _, position, _ ->
             filtered.getOrNull(position - list.headerViewsCount)?.let { contact ->
-                stopAudio(); model.selectContact(contact)
-                if (model.recording.value != true) list.smoothScrollToPosition(0)
+                toggleContact(contact)
             }
         }
         content.addView(list, LinearLayout.LayoutParams(-1, -1))
@@ -471,7 +486,7 @@ class MainActivity : AppCompatActivity() {
                         body.addView(button("Listen") { playItem(item) })
                         body.addView(button("Download again") { stopAudio(); model.download(item) })
                     }
-                    if (item.clipId.isNotBlank()) body.addView(button("Generate again") { model.generateAgain(item); dialog.dismiss() })
+                    if (item.clipId.isNotBlank()) body.addView(button("Generate again") { requestGeneration(item.id); dialog.dismiss() })
                     body.addView(text("Your other ringtones and selections are saved.", 14))
                 }
                 "uploaded" -> body.addView(button("Refresh voices") { model.loadVoices(); dialog.dismiss(); navigation.selectedItemId = R.id.section_voices })
@@ -623,6 +638,15 @@ class MainActivity : AppCompatActivity() {
         when (action) {
             "contacts" -> model.loadContacts()
             "generateContact" -> { model.loadContacts(); chooseGenerationContact() }
+            "generateRead" -> request(Manifest.permission.WRITE_CONTACTS, "generateWrite", id)
+            "generateWrite" -> if (Build.VERSION.SDK_INT < 29) {
+                request(Manifest.permission.WRITE_EXTERNAL_STORAGE, "generate", id)
+            } else perform("generate", id, item)
+            "generate" -> {
+                stopAudio()
+                if (id == null) model.generate() else item?.let { model.generateAgain(it) }
+                navigation.selectedItemId = R.id.section_ringtones
+            }
             "record" -> model.startRecording()
             "chooseContact" -> item?.let(::chooseAssignmentContact)
             "assignRead" -> request(Manifest.permission.WRITE_CONTACTS, "assignWrite", id)

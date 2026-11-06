@@ -35,7 +35,7 @@ class GenerationPipelineTest {
             }, save = { change -> change(disk).also { disk = reload(it) } }, pause = {})
         assertTrue(finished)
         assertEquals(1, submits)
-        assertEquals("ready", disk.stage)
+        assertEquals("downloading", disk.stage)
         assertEquals(initial.contactUri, disk.contactUri)
         assertEquals(initial.clipId, disk.clipId)
     }
@@ -54,7 +54,7 @@ class GenerationPipelineTest {
             status = { error("Already done") },
             save = { change -> change(disk).also { disk = reload(it) } }, pause = {})
         assertEquals(listOf(initial.request(), initial.request()), requests)
-        assertEquals("ready", disk.stage)
+        assertEquals("downloading", disk.stage)
     }
 
     @Test fun cloudRequestNotYetOnServerWaitsWithoutGeneratingAgain() = runBlocking {
@@ -81,6 +81,44 @@ class GenerationPipelineTest {
         assertEquals("failed", disk.stage)
         assertEquals("GPU unavailable", disk.detail)
         assertEquals("", disk.resumeStage) // A server failure needs a new UUID, not a submit retry.
+    }
+
+    @Test fun completedGenerationPersistsDownloadIntentBeforeAnyDownloadStarts() = runBlocking {
+        var disk = initial.copy(stage = "running")
+        assertTrue(advanceGeneration(disk,
+            submit = { error("Already submitted") },
+            status = { GenerationStatus("done", null) },
+            save = { change -> change(disk).also { disk = reload(it) } },
+            pause = {}))
+        val restored = reload(disk)
+        assertEquals("download", RingtoneWork.action(restored))
+        assertEquals(initial.contactUri, restored.contactUri)
+        // Restarting the old generation pass must not submit or poll again.
+        assertTrue(advanceGeneration(restored,
+            submit = { error("Must not submit again") },
+            status = { error("Must not poll again") },
+            save = { error("Download intent is already committed") },
+            pause = {}))
+    }
+
+    @Test fun completedDownloadResumesAutomaticAssignmentToOriginalContact() {
+        val downloading = reload(initial.copy(stage = "downloading"))
+        val saved = reload(downloading.afterDownload())
+        assertEquals("assign", RingtoneWork.action(saved))
+        assertTrue(saved.active)
+        assertEquals(initial.contactUri, saved.contactUri)
+        assertEquals(initial.contactName, saved.contactName)
+        assertEquals(initial.uid, saved.uid)
+        assertEquals(initial.id, saved.id)
+        // Download retries must not lose or retarget the assignment.
+        assertEquals(saved, reload(saved.copy(stage = "downloading").afterDownload()))
+    }
+
+    @Test fun importedHistoryWithoutContactDoesNotGuessAnAssignmentTarget() {
+        val saved = reload(initial.copy(contactUri = "", stage = "downloading").afterDownload())
+        assertEquals("downloaded", saved.stage)
+        assertNull(RingtoneWork.action(saved))
+        assertTrue(saved.detail.contains("Choose a contact"))
     }
 
     @Test fun completedItemKeepsDownloadAndAssignmentStateAcrossRestarts() {

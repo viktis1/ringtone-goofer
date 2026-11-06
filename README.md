@@ -6,10 +6,10 @@ An Android app for turning a contact and a voice sample into a personal ringtone
 
 1. Sign in with Google, open **Generate**, and choose a recipient.
 2. Select a voice clip and listen to a preview in the same tab.
-3. Press **Generate ringtone**. The complete request is saved before submission.
+3. Press **Generate & set ringtone** and grant contacts write access (plus storage access on Android 7–9). The complete request is saved before submission.
 4. Open the item in **History** to track queue, script and audio stages.
-5. When ready, tap **Download ringtone**. The WAV is saved privately for offline listening.
-6. Tap **Listen**, then **Assign**. Assignment publishes the audio to Android's ringtone storage and updates the saved contact.
+5. When generation finishes, the WAV downloads automatically in the background and is saved with the original contact for offline listening. Interrupted downloads retry automatically.
+6. The download is automatically published to Android’s ringtone storage and assigned to the original contact, including while the app is closed. Open History to listen or check the result. If permissions were revoked or the contact cannot be updated, the audio stays saved and History offers a retry.
 
 You can leave or close the app between these steps. The last section, draft, request, status, audio and assignment state are retained on this installation. Selecting a different contact or voice never changes an existing generation.
 
