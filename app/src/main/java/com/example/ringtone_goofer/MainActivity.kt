@@ -66,6 +66,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var navigation: BottomNavigationView
     private var section = R.id.section_contacts
     private var previewFile: File? = null
+    private enum class ContactPlayback { RINGTONE, RECORDING }
+    private var contactPlayback: ContactPlayback? = null
     private var contactQuery = ""
     private var voiceQuery = ""
     private data class VoiceRow(val title: String, val voice: Voice? = null)
@@ -95,7 +97,12 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         model = ViewModelProvider(this)[RingtoneViewModel::class.java]
-        audio = AudioPreview(this) { model.status.value = it }
+        audio = AudioPreview(this,
+            message = { model.status.value = it },
+            playbackChanged = { active ->
+                if (!active) contactPlayback = null
+                if (section == R.id.section_contacts) refreshSection?.invoke()
+            })
         val savedSection = savedInstanceState?.getInt("section")
             ?: getPreferences(MODE_PRIVATE).getInt("section", R.id.section_contacts)
         section = savedSection.takeIf { it in setOf(R.id.section_contacts, R.id.section_voices, R.id.section_ringtones) }
@@ -183,6 +190,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSection(value: Int) {
+        if (contactPlayback != null) stopAudio()
         section = value
         getPreferences(MODE_PRIVATE).edit().putInt("section", value).apply()
         refreshSection = null
@@ -207,16 +215,24 @@ class MainActivity : AppCompatActivity() {
             if (model.recording.value == true) model.stopRecording() else requestRecording()
         }
         val listenRingtone = button("Listen to current ringtone") {
-            model.selectedContact?.let { stopAudio(); audio.playContact(it) }
+            if (contactPlayback == ContactPlayback.RINGTONE) {
+                stopAudio()
+            } else model.selectedContact?.let {
+                stopAudio()
+                audio.playContact(it)
+                if (audio.isActive) contactPlayback = ContactPlayback.RINGTONE
+                refreshSection?.invoke()
+            }
         }
-        val listenRecording = button("Listen to saved recording") { playRecording() }
+        val listenRecording = button("Listen to saved recording") {
+            if (contactPlayback == ContactPlayback.RECORDING) stopAudio() else playRecording()
+        }
         val upload = button("Upload saved recording") { model.uploadRecording() }
         header.addView(selected)
         header.addView(tools)
         header.addView(listenRingtone)
         header.addView(listenRecording)
         header.addView(upload)
-        header.addView(button("Stop audio") { stopAudio() })
         val search = EditText(this).apply {
             hint = "Search contacts"
             setSingleLine()
@@ -252,10 +268,13 @@ class MainActivity : AppCompatActivity() {
             selected.text = contact?.let { "Selected: ${it.name}\n${it.ringtoneName}" +
                 if (recording) "\nRecording…" else "" } ?: "Select a contact below to enable audio controls."
             tools.text = if (recording) "Stop and save recording" else "Record voice sample"
-            tools.isEnabled = contact != null && model.stoppingRecording.value != true
-            listenRingtone.isEnabled = contact != null && !recording
-            listenRecording.isEnabled = contact != null && !recording
-            upload.isEnabled = contact != null && !recording && auth.currentUser != null
+            val playing = contactPlayback != null
+            listenRingtone.text = if (contactPlayback == ContactPlayback.RINGTONE) "Stop audio" else "Listen to current ringtone"
+            listenRecording.text = if (contactPlayback == ContactPlayback.RECORDING) "Stop audio" else "Listen to saved recording"
+            tools.isEnabled = contact != null && !playing && model.stoppingRecording.value != true
+            listenRingtone.isEnabled = !recording && (contactPlayback == ContactPlayback.RINGTONE || (contact != null && !playing))
+            listenRecording.isEnabled = !recording && (contactPlayback == ContactPlayback.RECORDING || (contact != null && !playing))
+            upload.isEnabled = contact != null && !recording && !playing && auth.currentUser != null
         }
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -532,8 +551,11 @@ class MainActivity : AppCompatActivity() {
         val contact = model.selectedContact ?: return
         stopAudio()
         val file = model.recordingFile(contact)
-        if (file.isFile) audio.play(Uri.fromFile(file), "recording for ${contact.name}")
-        else model.status.value = "Record a voice sample for ${contact.name} first."
+        if (file.isFile) {
+            audio.play(Uri.fromFile(file), "recording for ${contact.name}")
+            if (audio.isActive) contactPlayback = ContactPlayback.RECORDING
+            refreshSection?.invoke()
+        } else model.status.value = "Record a voice sample for ${contact.name} first."
     }
 
     private fun chooseGenerationContact() {
