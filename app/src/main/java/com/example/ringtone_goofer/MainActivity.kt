@@ -213,7 +213,7 @@ class MainActivity : AppCompatActivity() {
         header.addView(text("Contacts", 22))
         header.addView(text("Select a contact to manage their ringtone and voice recordings.", 14))
         statusHeader(header)
-        header.addView(button("Load / refresh contacts") { request(Manifest.permission.READ_CONTACTS, "contacts") })
+        header.addView(secondaryButton("Load / refresh contacts") { request(Manifest.permission.READ_CONTACTS, "contacts") })
         val search = EditText(this).apply {
             hint = "Search contacts"
             setSingleLine()
@@ -239,20 +239,37 @@ class MainActivity : AppCompatActivity() {
             override fun getItemId(position: Int) = filtered[position].lookupUri.toString().hashCode().toLong()
             override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
                 val contact = filtered[position]
-                return column(16).apply {
+                return column(16).apply contactRow@{
                     val chosen = model.contactSelection.value == contact.lookupUri.toString()
                     val expanded = expandedContact == contact.lookupUri.toString() && chosen
-                    addView(button((if (expanded) "▾  " else "▸  ") + contact.name.ifBlank { "Unnamed contact" }) {
-                        toggleContact(contact)
-                    }.apply {
+                    addView(column().apply {
+                        minimumHeight = dp(64)
+                        gravity = android.view.Gravity.CENTER_VERTICAL
+                        val label = text(contact.name.ifBlank { "Unnamed contact" }, 18).apply {
+                            setTypeface(typeface, android.graphics.Typeface.BOLD)
+                            setCompoundDrawablesRelativeWithIntrinsicBounds(
+                                0, 0, if (expanded) android.R.drawable.arrow_up_float else android.R.drawable.arrow_down_float, 0)
+                            androidx.core.widget.TextViewCompat.setCompoundDrawableTintList(
+                                this, android.content.res.ColorStateList.valueOf(
+                                    MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary)))
+                        }
+                        addView(label)
+                        addView(text(contact.ringtoneName, 13).apply {
+                            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurface))
+                            alpha = 0.7f
+                        })
+                        val attributes = obtainStyledAttributes(intArrayOf(android.R.attr.selectableItemBackground))
+                        setBackgroundResource(attributes.getResourceId(0, 0))
+                        attributes.recycle()
+                        isFocusable = true
+                        setOnClickListener { toggleContact(contact) }
                         ViewCompat.setStateDescription(this, if (expanded) "Expanded" else "Collapsed")
                     })
-                    addView(text(contact.ringtoneName, 13))
                     if (expanded) {
                         val tools = button("Record voice sample") {
                             if (model.recording.value == true) model.stopRecording() else requestRecording()
                         }
-                        val listenRingtone = button("Listen to current ringtone") {
+                        val listenRingtone = secondaryButton("Listen to current ringtone") {
                             if (contactPlayback == ContactPlayback.RINGTONE) {
                                 stopAudio()
                             } else model.selectedContact?.let {
@@ -262,10 +279,10 @@ class MainActivity : AppCompatActivity() {
                                 refreshSection?.invoke()
                             }
                         }
-                        val listenRecording = button("Listen to saved recording") {
+                        val listenRecording = secondaryButton("Listen to saved recording") {
                             if (contactPlayback == ContactPlayback.RECORDING) stopAudio() else playRecording()
                         }
-                        val upload = button("Upload saved recording") { model.uploadRecording() }
+                        val upload = secondaryButton("Upload saved recording") { model.uploadRecording() }
                         val recording = model.recording.value == true
                         tools.text = if (recording) "Stop and save recording" else "Record voice sample"
                         val playing = contactPlayback != null
@@ -280,9 +297,13 @@ class MainActivity : AppCompatActivity() {
                         addView(listenRecording)
                         addView(upload)
                     }
-                    if (chosen) setBackgroundColor(MaterialColors.layer(
-                        MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurface),
-                        MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary), 0.12f))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(20).toFloat()
+                        setColor(MaterialColors.layer(
+                            MaterialColors.getColor(this@contactRow, com.google.android.material.R.attr.colorSurface),
+                            MaterialColors.getColor(this@contactRow, com.google.android.material.R.attr.colorPrimary),
+                            if (chosen) 0.09f else 0f))
+                    }
                 }
             }
         }
@@ -725,9 +746,19 @@ class MainActivity : AppCompatActivity() {
     }
     private fun button(value: String, action: () -> Unit): Button = MaterialButton(this).apply {
         text = value; isAllCaps = false
+        cornerRadius = dp(14)
         setOnClickListener { action() }
         layoutParams = LinearLayout.LayoutParams(-1, -2)
     }
+
+    private fun secondaryButton(value: String, action: () -> Unit): Button =
+        MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = value
+            isAllCaps = false
+            cornerRadius = dp(14)
+            setOnClickListener { action() }
+            layoutParams = LinearLayout.LayoutParams(-1, -2)
+        }
 
     override fun onResume() {
         super.onResume()
