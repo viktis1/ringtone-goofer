@@ -19,7 +19,14 @@ data class GenerationRequest(
     val jobId: String, val caller: String, val voiceId: String, val clipId: String
 )
 data class GenerationJob(val id: String, val statusUrl: String, val downloadUrl: String, val status: String)
-data class GenerationStatus(val status: String, val error: String?)
+data class GenerationStatus(val status: String, val error: String?, val scriptStatus: String = "", val audioStatus: String = "") {
+    val detail: String get() = error ?: when {
+        audioStatus.isNotBlank() -> "Creating audio · $audioStatus"
+        scriptStatus.isNotBlank() -> "Writing script · $scriptStatus"
+        status == "queued" -> "Waiting for a generation slot"
+        else -> ""
+    }
+}
 class ApiHttpException(val code: Int, detail: String) : IOException("HTTP $code: $detail")
 class ApiConnectionException(cause: IOException) : IOException(cause.message, cause)
 
@@ -116,7 +123,8 @@ class RingtoneApi(
     suspend fun status(job: GenerationJob): GenerationStatus {
         val result = json(job.statusUrl)
         return GenerationStatus(result.getString("status"),
-            result.optString("error").takeIf { it.isNotBlank() && it != "null" })
+            result.optString("error").takeIf { it.isNotBlank() && it != "null" },
+            result.optString("llm_status"), result.optString("tts_status"))
     }
 
     suspend fun download(job: GenerationJob, target: File) = request(job.downloadUrl) { connection ->

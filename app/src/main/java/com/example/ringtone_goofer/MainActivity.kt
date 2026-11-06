@@ -3,485 +3,582 @@ package com.example.ringtone_goofer
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioAttributes
-import android.media.MediaPlayer
-import android.media.Ringtone
-import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.View
-import com.google.firebase.storage.FirebaseStorage
-import com.google.firebase.storage.StorageMetadata
-import com.google.firebase.storage.UploadTask
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
+import android.view.ViewGroup
+import android.widget.BaseAdapter
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
-import android.widget.Spinner
-import android.widget.ScrollView
-import androidx.lifecycle.Observer
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
-import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.GoogleAuthProvider
-import kotlinx.coroutines.tasks.await
-import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
+import androidx.credentials.exceptions.NoCredentialException
+import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.card.MaterialCardView
+import com.google.android.material.color.MaterialColors
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileInputStream
-import java.util.UUID
+import java.text.DateFormat
+import java.util.Date
 
+/**
+ * Three destinations share one saved draft. Library actions always use the item snapshot,
+ * never the currently selected contact or voice.
+ */
 class MainActivity : AppCompatActivity() {
-    private val auth by lazy { FirebaseAuth.getInstance() }
-    private lateinit var signInButton: Button
-    private lateinit var uploadButton: Button
-    private var uploading = false
     private lateinit var model: RingtoneViewModel
-    private lateinit var selected: TextView
+    private lateinit var audio: AudioPreview
+    private lateinit var content: LinearLayout
+    private lateinit var summary: TextView
+    private lateinit var next: Button
     private lateinit var status: TextView
-    private lateinit var voicePicker: Spinner
-    private lateinit var clipPicker: Spinner
-    private lateinit var generateButton: Button
-    private lateinit var previewButton: Button
-    private lateinit var recordButton: Button
-    private lateinit var playRecordingButton: Button
-    private lateinit var playContactButton: Button
-    private lateinit var assignButton: Button
-    private lateinit var cancelButton: Button
-    private lateinit var contactRows: ArrayAdapter<String>
-    private var rows = emptyList<AddressBookContact>()
-    private var voiceChoices = emptyList<Voice>()
-    private var clipChoices = emptyList<VoiceClip>()
+    private lateinit var signInButton: Button
+    private lateinit var navigation: BottomNavigationView
+    private var section = R.id.section_contacts
+    private var previewFile: File? = null
+    private var contactQuery = ""
     private var previewTask: Job? = null
-    private var player: MediaPlayer? = null
-    private var ringtone: Ringtone? = null
-    private val handler = Handler(Looper.getMainLooper())
+    private var refreshSection: (() -> Unit)? = null
     private var pendingPermission: String? = null
-
+    private var pendingAction: String? = null
+    private var pendingItem: String? = null
+    private val auth get() = FirebaseAuth.getInstance()
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val permission = pendingPermission
-        pendingPermission = null
-        if (granted) {
-            when (permission) {
-                Manifest.permission.READ_CONTACTS -> model.loadContacts()
-                Manifest.permission.WRITE_CONTACTS -> model.assign()
-                Manifest.permission.RECORD_AUDIO -> model.startRecording()
-                Manifest.permission.WRITE_EXTERNAL_STORAGE -> model.generate()
-            }
-        } else {
-            model.status.value = "Permission denied. This action is unavailable."
+        val action = pendingAction
+        val id = pendingItem
+        pendingPermission = null; pendingAction = null; pendingItem = null
+        if (granted) perform(action, id)
+        else {
+            model.status.value = "Access was denied. Your draft and ringtones are still saved."
             if (permission != null && !shouldShowRequestPermissionRationale(permission)) {
-                AlertDialog.Builder(this)
-                    .setMessage("You can enable this permission in app settings.")
+                AlertDialog.Builder(this).setMessage("You can enable access in app settings when you are ready.")
                     .setPositiveButton("Settings") { _, _ ->
-                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                            Uri.fromParts("package", packageName, null)))
-                    }.setNegativeButton("Cancel", null).show()
+                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+                    }.setNegativeButton("Later", null).show()
             }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        pendingPermission = savedInstanceState?.getString("permission")
         model = ViewModelProvider(this)[RingtoneViewModel::class.java]
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(16, 8, 16, 8)
-        }
-        fun label(text: String) = TextView(this).apply { this.text = text; header.addView(this) }
-        fun button(text: String, action: () -> Unit) = Button(this).apply {
-            this.text = text; setOnClickListener { action() }; header.addView(this)
-        }
-        label("Ringtone Goofer")
-        signInButton = button("Sign in with Google") { signIn() }
-        updateSignInButton()
-        button("Load / refresh contacts") {
-            withPermission(Manifest.permission.READ_CONTACTS,
-                "Contacts access lets you select a person and see their current ringtone.") { model.loadContacts() }
-        }
-        selected = label("Select a contact from the overview below.")
-        playContactButton = button("Play selected contact's ringtone") { playContact() }
-        button("Stop audio") { stopAudio() }
-        recordButton = button("Record audio for selected contact") {
-            if (model.recording.value == true) model.stopRecording() else requestRecording()
-        }
-        playRecordingButton = button("Play recorded audio for selected contact") { playRecording() }
-        uploadButton = button("Upload recorded audio for selected contact") { uploadRecording() }
-        label("Generate a new ringtone")
-        label("Only the selected contact's name is sent to the ringtone server. Receiver: viktor.")
-        button("Load / retry voices") { model.loadVoices() }
-        label("Voice")
-        voicePicker = Spinner(this).also { header.addView(it) }
-        label("Clip")
-        clipPicker = Spinner(this).also { header.addView(it) }
-        previewButton = button("Preview clip") {
-            val voice = voiceChoices.firstOrNull { it.id == model.voiceId }
-            val clip = clipChoices.firstOrNull { it.id == model.clipId }
-            if (voice != null && clip != null) playPreview(voice, clip)
-        }
-        generateButton = button("Generate ringtone") {
-            stopAudio()
-            if (Build.VERSION.SDK_INT < 29) {
-                withPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                    "Storage access is needed on this Android version to save a shared ringtone.") { model.generate() }
-            } else model.generate()
-        }
-        button("Submitted jobs") { showSubmittedJobs() }
-        cancelButton = button("Cancel job monitoring") { model.cancel() }
-        assignButton = button("Assign downloaded ringtone to contact") {
-            withPermission(Manifest.permission.WRITE_CONTACTS,
-                "Contacts write access is needed to assign the downloaded ringtone.") { model.assign() }
-        }
-        status = label("")
-        label("All contacts · tap to select, then Play or Generate")
+        audio = AudioPreview(this) { model.status.value = it }
+        val savedSection = savedInstanceState?.getInt("section")
+            ?: getPreferences(MODE_PRIVATE).getInt("section", R.id.section_contacts)
+        section = savedSection.takeIf { it in setOf(R.id.section_contacts, R.id.section_voices, R.id.section_ringtones) }
+            ?: R.id.section_contacts
+        contactQuery = savedInstanceState?.getString("contactQuery").orEmpty()
+        pendingPermission = savedInstanceState?.getString("permission")
+        pendingAction = savedInstanceState?.getString("action")
+        pendingItem = savedInstanceState?.getString("item")
+        val root = column()
+        root.setBackgroundColor(MaterialColors.getColor(root, com.google.android.material.R.attr.colorSurface))
+        val heading = column(16)
+        heading.addView(text("Ringtone Goofer", 26))
+        signInButton = button("", ::signIn)
+        heading.addView(signInButton)
 
-        contactRows = ArrayAdapter(this, android.R.layout.simple_list_item_1, mutableListOf<String>())
-        val list = ListView(this).apply {
-            addHeaderView(header, null, false)
-            adapter = contactRows
-            setOnItemClickListener { _, _, position, _ ->
-                rows.getOrNull(position - headerViewsCount)?.let {
-                    if (model.busy.value != true && model.recording.value != true) {
-                        stopAudio()
-                        model.selectedContact = it
-                        updateControls()
-                    }
+        root.addView(heading)
+        content = column()
+        root.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
+        navigation = BottomNavigationView(this).apply {
+            menu.add(0, R.id.section_contacts, 0, "Contacts").setIcon(android.R.drawable.ic_menu_call)
+            menu.add(0, R.id.section_voices, 1, "Voices").setIcon(android.R.drawable.ic_btn_speak_now)
+            menu.add(0, R.id.section_ringtones, 2, "Ringtones").setIcon(android.R.drawable.ic_menu_save)
+            setOnItemSelectedListener { item -> showSection(item.itemId); true }
+            selectedItemId = section
+        }
+        root.addView(navigation)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+            insets
+        }
+        setContentView(root)
+        showSection(section)
+        model.draft.observe(this) { updateSummary(); refreshSection?.invoke() }
+        model.voices.observe(this) { updateSummary(); if (section == R.id.section_voices) refreshSection?.invoke() }
+        model.contacts.observe(this) { updateSummary(); if (section == R.id.section_contacts) refreshSection?.invoke() }
+        model.items.observe(this) { if (section == R.id.section_ringtones) refreshSection?.invoke() }
+        model.loaded.observe(this) { updateSummary(); updateAccount() }
+        model.saving.observe(this) { updateSummary() }
+        model.recording.observe(this) { updateSummary(); if (section == R.id.section_contacts) refreshSection?.invoke() }
+        model.stoppingRecording.observe(this) { if (section == R.id.section_contacts) refreshSection?.invoke() }
+        model.status.observe(this) { status.text = it }
+        updateAccount()
+    }
+
+    private fun updateAccount() {
+        val user = auth.currentUser
+        signInButton.text = if (user == null) "Sign in with Google" else user.email ?: "Google account connected"
+        signInButton.isEnabled = true
+    }
+
+    private fun updateSummary() {
+        val draft = model.draft.value ?: RingtoneDraft()
+        val voice = model.voices.value.orEmpty().firstOrNull { it.id == draft.voiceId }
+        val clip = voice?.clips?.firstOrNull { it.id == draft.clipId }
+        summary.text = when {
+            draft.contactUri.isBlank() -> "1 · Select a contact\nMake their next call sound personal."
+            clip == null -> "2 · Choose a voice\nFor ${draft.contactName}"
+            else -> "3 · Ready to generate\n${draft.contactName} · ${voice.name}\n${clip.name.substringAfterLast('/')}"
+        }
+        next.text = when {
+            draft.contactUri.isBlank() -> "Select contact"
+            clip == null -> "Choose voice"
+            else -> "Generate ringtone"
+        }
+        next.isEnabled = model.loaded.value == true && model.saving.value != true && model.recording.value != true
+    }
+
+    private fun nextStep() {
+        val draft = model.draft.value ?: return
+        when {
+            draft.contactUri.isBlank() -> navigation.selectedItemId = R.id.section_contacts
+            model.voices.value.orEmpty().none { it.id == draft.voiceId && it.clips.any { c -> c.id == draft.clipId } } ->
+                navigation.selectedItemId = R.id.section_voices
+            model.selectedContact == null -> {
+                navigation.selectedItemId = R.id.section_contacts
+                request(Manifest.permission.READ_CONTACTS, "contacts")
+            }
+            else -> { stopAudio(); model.generate(); navigation.selectedItemId = R.id.section_ringtones }
+        }
+    }
+
+    private fun showSection(value: Int) {
+        section = value
+        getPreferences(MODE_PRIVATE).edit().putInt("section", value).apply()
+        refreshSection = null
+        content.removeAllViews()
+        when (value) {
+            R.id.section_contacts -> contactsScreen()
+            R.id.section_voices -> voicesScreen()
+            R.id.section_ringtones -> libraryScreen()
+        }
+        updateSummary()
+    }
+
+    private fun contactsScreen() {
+        val list = ListView(this).apply { divider = null }
+        val header = column(16)
+        workflowHeader(header)
+        header.addView(text("Contacts", 22))
+        header.addView(text("Choose who this ringtone is for. Selections are saved automatically.", 14))
+        header.addView(button("Load / refresh contacts") { request(Manifest.permission.READ_CONTACTS, "contacts") })
+        val selected = text("", 15)
+        val tools = button("Contact audio & voice recording") {
+            if (model.recording.value == true) model.stopRecording() else contactAudio()
+        }
+        header.addView(selected); header.addView(tools)
+        val search = EditText(this).apply {
+            hint = "Search contacts"
+            setSingleLine()
+            setText(contactQuery)
+            contentDescription = "Search contacts"
+        }
+        header.addView(search)
+        list.addHeaderView(header, null, false)
+        var filtered = emptyList<AddressBookContact>()
+        // Use a two-line adapter so the assigned ringtone stays visible under each name.
+        val rows = object : BaseAdapter() {
+            override fun getCount() = filtered.size
+            override fun getItem(position: Int) = filtered[position]
+            override fun getItemId(position: Int) = filtered[position].lookupUri.toString().hashCode().toLong()
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+                val contact = filtered[position]
+                return column(16).apply {
+                    val chosen = model.draft.value?.contactUri == contact.lookupUri.toString()
+                    addView(text((if (chosen) "✓  " else "") + contact.name.ifBlank { "Unnamed contact" }, 17))
+                    addView(text(contact.ringtoneName, 13))
+                    if (chosen) setBackgroundColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurfaceVariant))
                 }
             }
         }
-        ViewCompat.setOnApplyWindowInsetsListener(list) { view, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            insets
+        list.adapter = rows
+        refreshSection = {
+            filtered = model.contacts.value.orEmpty().filter { it.name.contains(contactQuery, ignoreCase = true) }
+            rows.notifyDataSetChanged()
+            val draft = model.draft.value!!
+            selected.text = if (draft.contactName.isBlank()) "No contact selected."
+                else "Selected: ${draft.contactName}" + if (model.recording.value == true) " · Recording…" else ""
+            tools.text = if (model.recording.value == true) "Stop and save recording" else "Contact audio & voice recording"
+            tools.isEnabled = model.selectedContact != null && model.stoppingRecording.value != true
         }
-        setContentView(list)
-        voicePicker.onItemSelectedListener = selectionListener { position ->
-            val voice = voiceChoices.getOrNull(position) ?: return@selectionListener
-            if (model.voiceId != voice.id) { stopAudio(); model.clipId = null }
-            model.voiceId = voice.id
-            showClips(voice)
-        }
-        clipPicker.onItemSelectedListener = selectionListener { position ->
-            val id = clipChoices.getOrNull(position)?.id
-            if (model.clipId != id) stopAudio()
-            model.clipId = id
-            updateControls()
-        }
-        model.contacts.observe(this) {
-            rows = it
-            contactRows.clear()
-            contactRows.addAll(it.map { contact ->
-                "${contact.name.ifBlank { "(Unnamed contact)" }} · ${contact.ringtoneName}"
-            })
-            updateControls()
-        }
-        model.voices.observe(this) {
-            stopAudio()
-            if (it.isEmpty()) {
-                model.voiceId = null
-                model.clipId = null
-                clipChoices = emptyList()
-                clipPicker.adapter = ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, emptyList())
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                contactQuery = s.toString(); refreshSection?.invoke()
             }
-            voiceChoices = it
-            voicePicker.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, it.map(Voice::name))
-            val index = it.indexOfFirst { voice -> voice.id == model.voiceId }.coerceAtLeast(0)
-            voicePicker.setSelection(index)
-            it.getOrNull(index)?.let { voice -> model.voiceId = voice.id; showClips(voice) }
-            updateControls()
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        list.setOnItemClickListener { _, _, position, _ ->
+            filtered.getOrNull(position - list.headerViewsCount)?.let { contact ->
+                stopAudio(); model.selectContact(contact)
+                if (model.recording.value != true) navigation.selectedItemId = R.id.section_voices
+            }
         }
-        model.status.observe(this) { status.text = it }
-        model.busy.observe(this) { updateControls() }
-        model.recording.observe(this) { updateControls() }
-        model.stoppingRecording.observe(this) { updateControls() }
-        model.generated.observe(this) { updateControls() }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
-            model.loadContacts()
-        }
+        content.addView(list, LinearLayout.LayoutParams(-1, -1))
+        refreshSection?.invoke()
     }
 
-    private fun showSubmittedJobs() {
-        val text = TextView(this).apply { setPadding(24, 16, 24, 16); setTextIsSelectable(true) }
-        val dialog = AlertDialog.Builder(this).setTitle("Submitted jobs")
-            .setView(ScrollView(this).apply { addView(text) })
-            .setPositiveButton("Close", null).setNeutralButton("Refresh", null).create()
-        fun render() {
-            text.text = model.jobsMessage.value.orEmpty() + "\n\n" +
-                model.submittedJobs.value.orEmpty().joinToString("\n\n") { job ->
-                    "${job.caller} · ${job.route}\n${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(job.created))}\n${job.id}\n${job.status}\n${job.detail}"
-                }.ifEmpty { "No jobs recorded for this account on this device yet." }
+    private fun voicesScreen() {
+        val list = ListView(this).apply { divider = null }
+        val header = column(16)
+        workflowHeader(header)
+        header.addView(text("Voices", 22))
+        header.addView(text("Select a clip, listen to a sample, then generate. Saved voices remain available while offline.", 14))
+        header.addView(button("Refresh voices") { model.loadVoices() })
+        header.addView(button("Listen to selected voice") { previewVoice() })
+        header.addView(button("Stop audio") { stopAudio() })
+        val empty = text("", 14)
+        header.addView(empty)
+        list.addHeaderView(header, null, false)
+        var clips = emptyList<Pair<Voice, VoiceClip>>()
+        val adapter = object : BaseAdapter() {
+            override fun getCount() = clips.size
+            override fun getItem(position: Int) = clips[position]
+            override fun getItemId(position: Int) = clips[position].second.id.hashCode().toLong()
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+                val (voice, clip) = clips[position]
+                val chosen = model.draft.value?.clipId == clip.id && model.draft.value?.voiceId == voice.id
+                return column(16).apply {
+                    addView(text((if (chosen) "✓  " else "") + voice.name, 17))
+                    addView(text(clip.name.substringAfterLast('/'), 14))
+                    if (chosen) setBackgroundColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurfaceVariant))
+                }
+            }
         }
-        val rowsObserver = Observer<List<SubmittedJob>> { render() }
-        val messageObserver = Observer<String> { render() }
-        model.submittedJobs.observe(this, rowsObserver)
-        model.jobsMessage.observe(this, messageObserver)
-        dialog.setOnDismissListener {
-            model.submittedJobs.removeObserver(rowsObserver)
-            model.jobsMessage.removeObserver(messageObserver)
+        list.adapter = adapter
+        list.setOnItemClickListener { _, _, position, _ ->
+            clips.getOrNull(position - list.headerViewsCount)?.let { (voice, clip) ->
+                stopAudio(); model.selectVoice(voice, clip)
+            }
         }
-        dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { model.loadJobs() } }
+        refreshSection = {
+            clips = model.voices.value.orEmpty().flatMap { v -> v.clips.map { v to it } }
+            empty.text = if (clips.isEmpty()) "No voice clips loaded. Sign in and refresh, or record a sample from Contacts." else "${clips.size} voice clips"
+            adapter.notifyDataSetChanged()
+        }
+        content.addView(list, LinearLayout.LayoutParams(-1, -1))
+        refreshSection?.invoke()
+    }
+
+    private fun libraryScreen() {
+        val list = ListView(this).apply { divider = null }
+        val header = column(16)
+        workflowHeader(header)
+        header.addView(text("Ringtones", 22))
+        header.addView(text("Generation and downloads continue in the background. Tap an item to download, listen or assign.", 14))
+        val empty = text("", 14)
+        header.addView(empty)
+        list.addHeaderView(header, null, false)
+        var rows = emptyList<RingtoneItem>()
+        val adapter = object : BaseAdapter() {
+            override fun getCount() = rows.size
+            override fun getItem(position: Int) = rows[position]
+            override fun getItemId(position: Int) = rows[position].id.hashCode().toLong()
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+                val item = rows[position]
+                return column(16).apply {
+                    addView(text(item.contactName, 19))
+                    addView(text(item.voiceName + " · " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.created)), 13))
+                    addView(text(item.label, 16))
+                    if (item.detail.isNotBlank()) addView(text(item.detail, 13))
+                    if (item.active) addView(ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true })
+                    addView(text("Open details  ›", 14))
+                }
+            }
+        }
+        list.adapter = adapter
+        list.setOnItemClickListener { _, _, position, _ ->
+            rows.getOrNull(position - list.headerViewsCount)?.let(::showItem)
+        }
+        refreshSection = {
+            rows = model.items.value.orEmpty()
+            empty.text = if (rows.isEmpty()) "Your generated ringtones will appear here. Start with a contact and a voice."
+                else "${rows.size} saved items"
+            adapter.notifyDataSetChanged()
+        }
+        content.addView(list, LinearLayout.LayoutParams(-1, -1))
+        refreshSection?.invoke()
+    }
+
+    private fun showItem(initial: RingtoneItem) {
+        val body = column(20)
+        val scroll = android.widget.ScrollView(this).apply { addView(body) }
+        val dialog = AlertDialog.Builder(this).setTitle(initial.contactName).setView(scroll)
+            .setPositiveButton("Close", null).create()
+        fun render(item: RingtoneItem) {
+            body.removeAllViews()
+            body.addView(text(item.voiceName, 18))
+            if (item.clipName.isNotBlank()) body.addView(text(item.clipName.substringAfterLast('/'), 14))
+            body.addView(text(item.label, 20))
+            if (item.detail.isNotBlank()) body.addView(text(item.detail, 14))
+            if (item.active) body.addView(ProgressBar(this))
+            when (item.stage) {
+                "ready" -> body.addView(button("Download ringtone") { model.download(item) })
+                "downloaded", "assigned" -> {
+                    body.addView(button("Listen") { playItem(item) })
+                    body.addView(button("Stop audio") { stopAudio() })
+                    body.addView(button("Assign to ${item.contactName}") { requestAssignment(item) })
+                    body.addView(button("Choose assignment contact") { chooseAssignmentContact(item) })
+                    body.addView(button("Download again") { stopAudio(); model.download(item) })
+                }
+                "failed" -> {
+                    if (item.resumeStage.isNotBlank()) body.addView(button("Retry") {
+                        if (item.resumeStage == "assigning") requestAssignment(item) else model.retry(item)
+                    })
+                    if (item.resumeStage == "assigning") {
+                        body.addView(button("Choose assignment contact") { chooseAssignmentContact(item) })
+                        body.addView(button("Listen") { playItem(item) })
+                        body.addView(button("Download again") { stopAudio(); model.download(item) })
+                    }
+                    if (item.clipId.isNotBlank()) body.addView(button("Generate again") { model.generateAgain(item); dialog.dismiss() })
+                    body.addView(text("Your other ringtones and selections are saved.", 14))
+                }
+                "uploaded" -> body.addView(button("Refresh voices") { model.loadVoices(); dialog.dismiss(); navigation.selectedItemId = R.id.section_voices })
+            }
+            body.addView(text("Job ${item.id}" + if (item.route.isBlank()) "" else "\nSubmitted via ${item.route}", 12).apply { setTextIsSelectable(true) })
+        }
+        val observer = Observer<List<RingtoneItem>> { items -> items.firstOrNull { it.id == initial.id }?.let(::render) }
+        model.items.observe(this, observer)
+        dialog.setOnDismissListener { model.items.removeObserver(observer) }
+        render(initial)
         dialog.show()
-        model.loadJobs()
     }
 
-    private fun selectionListener(action: (Int) -> Unit) = object : AdapterView.OnItemSelectedListener {
-        override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = action(position)
-        override fun onNothingSelected(parent: AdapterView<*>?) {}
+    private fun requestAssignment(item: RingtoneItem) {
+        if (item.contactUri.isBlank()) { chooseAssignmentContact(item); return }
+        request(Manifest.permission.READ_CONTACTS, "assignRead", item.id)
     }
 
-    private fun showClips(voice: Voice) {
-        clipChoices = voice.clips
-        clipPicker.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, clipChoices.map(VoiceClip::name))
-        val index = clipChoices.indexOfFirst { it.id == model.clipId }.coerceAtLeast(0)
-        clipPicker.setSelection(index)
-        model.clipId = clipChoices.getOrNull(index)?.id
-        updateControls()
+    private fun chooseAssignmentContact(item: RingtoneItem) {
+        if (!hasPermission(Manifest.permission.READ_CONTACTS)) {
+            request(Manifest.permission.READ_CONTACTS, "chooseContact", item.id); return
+        }
+        model.loadContacts()
+        val contacts = model.contacts.value.orEmpty()
+        if (contacts.isEmpty()) { model.status.value = "Contacts are loading. Try Choose assignment contact again."; return }
+        AlertDialog.Builder(this).setTitle("Assign this ringtone to…")
+            .setItems(contacts.map { it.name }.toTypedArray()) { _, index -> model.setAssignmentContact(item, contacts[index]) }
+            .setNegativeButton("Cancel", null).show()
     }
 
-    private fun updateControls() {
-        val recording = model.recording.value == true
-        val busy = model.busy.value == true || recording
-        val contact = model.selectedContact
-        selected.text = contact?.let { "Selected: ${it.name} · ${it.ringtoneName}" } ?: "Select a contact below."
-        voicePicker.isEnabled = !busy
-        clipPicker.isEnabled = !busy
-        generateButton.isEnabled = !busy && contact != null && model.clipId != null
-        previewButton.isEnabled = !recording && model.clipId != null
-        playContactButton.isEnabled = !recording && contact != null
-        recordButton.text = if (recording) "Stop and save recording" else "Record audio for selected contact"
-        recordButton.isEnabled = if (recording) model.stoppingRecording.value != true else !busy && !uploading && contact != null
-        uploadButton.isEnabled = !recording && !uploading && contact != null
-        playRecordingButton.isEnabled = !recording && contact != null
-        cancelButton.isEnabled = model.busy.value == true
-        assignButton.isEnabled = !busy && model.generated.value != null
-        model.generated.value?.let { assignButton.text = "Assign ringtone to ${it.contact.name}" }
-    }
-
-    private fun withPermission(permission: String, rationale: String, action: () -> Unit) {
-        when {
-            ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED -> action()
-            shouldShowRequestPermissionRationale(permission) -> AlertDialog.Builder(this)
-                .setMessage(rationale).setPositiveButton("Continue") { _, _ ->
-                    pendingPermission = permission; permissionLauncher.launch(permission)
-                }.setNegativeButton("Cancel", null).show()
-            else -> { pendingPermission = permission; permissionLauncher.launch(permission) }
+    private fun playItem(item: RingtoneItem) {
+        if (model.recording.value == true) return
+        stopAudio()
+        previewTask = lifecycleScope.launch {
+            val file = withContext(Dispatchers.IO) { RingtoneLibrary.get(this@MainActivity).audioFile(this@MainActivity, item) }
+            if (file.isFile) audio.play(Uri.fromFile(file), "ringtone for ${item.contactName}")
+            else model.status.value = "Local audio is missing. Tap Download again."
         }
     }
 
-    private fun playContact() {
+    private fun previewVoice() {
         if (model.recording.value == true) return
-        val contact = model.selectedContact ?: return
+        val voice = model.voices.value.orEmpty().firstOrNull { it.id == model.draft.value?.voiceId } ?: return
+        val clip = voice.clips.firstOrNull { it.id == model.draft.value?.clipId } ?: return
         stopAudio()
-        try {
-            val uri = contact.ringtone ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-            if (contact.ringtone == null &&
-                RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_RINGTONE) == null) {
-                model.status.value = "Default ringtone is silent."
-                return
-            }
-            ringtone = RingtoneManager.getRingtone(this, uri) ?: error("Ringtone unavailable")
-            ringtone?.play()
-        } catch (e: Exception) {
-            stopAudio()
-            model.status.value = "Cannot play ringtone: ${e.message}"
-        }
-    }
-
-    private fun playPreview(voice: Voice, clip: VoiceClip) {
-        if (model.recording.value == true) return
-        stopAudio()
-        model.status.value = "Loading preview…"
+        model.status.value = "Loading voice sample…"
         previewTask = lifecycleScope.launch {
             var file: File? = null
             try {
-                val cached = File.createTempFile("voice-preview-", ".audio", cacheDir)
-                file = cached
-                model.api.preview(voice, clip, cached)
-                playLocalAudio(cached, "preview: ${clip.name}")
-            } catch (e: CancellationException) {
-                throw e
+                val target = withContext(Dispatchers.IO) { File.createTempFile("voice-preview-", ".audio", cacheDir) }
+                file = target
+                previewFile = target
+                model.api.preview(voice, clip, target)
+                audio.play(Uri.fromFile(target), clip.name.substringAfterLast('/'))
+                // Keep this small cache file until playback has stopped.
             } catch (e: Exception) {
-                stopAudio()
-                model.status.value = "Cannot preview clip: ${e.message}"
-            } finally {
+                if (e is CancellationException) throw e
+                model.status.value = "Cannot preview voice: ${e.message}"
                 file?.delete()
             }
         }
     }
 
-    private fun requestRecording() {
+    private fun contactAudio() {
         val contact = model.selectedContact ?: return
-        stopAudio()
-        val start = {
-            withPermission(Manifest.permission.RECORD_AUDIO,
-                "Microphone access is needed to record audio for this contact.") { model.startRecording() }
+        val recording = model.recording.value == true
+        val options = if (recording) arrayOf("Stop and save recording")
+            else arrayOf("Listen to current ringtone", "Record voice sample", "Listen to saved recording", "Upload saved recording", "Stop audio")
+        AlertDialog.Builder(this).setTitle(contact.name).setItems(options) { _, index ->
+            if (recording) model.stopRecording() else when (index) {
+                0 -> { stopAudio(); audio.playContact(contact) }
+                1 -> {
+                    stopAudio()
+                    val file = model.recordingFile(contact)
+                    if (file.exists()) AlertDialog.Builder(this).setMessage("Replace the saved voice recording for ${contact.name}?")
+                        .setPositiveButton("Record") { _, _ -> request(Manifest.permission.RECORD_AUDIO, "record") }
+                        .setNegativeButton("Cancel", null).show()
+                    else request(Manifest.permission.RECORD_AUDIO, "record")
+                }
+                2 -> {
+                    stopAudio()
+                    val file = model.recordingFile(contact)
+                    if (file.isFile) audio.play(Uri.fromFile(file), "saved recording")
+                    else model.status.value = "Record a voice sample first."
+                }
+                3 -> model.uploadRecording()
+                4 -> stopAudio()
+            }
+        }.setNegativeButton("Close", null).show()
+    }
+
+    private fun hasPermission(permission: String) =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun request(permission: String, action: String, id: String? = null) {
+        if (hasPermission(permission)) { perform(action, id); return }
+        val launch = {
+            pendingPermission = permission; pendingAction = action; pendingItem = id
+            permissionLauncher.launch(permission)
         }
-        val file = model.recordingFile(contact)
-        if (file.exists()) {
-            AlertDialog.Builder(this)
-                .setMessage("Replace the existing recording ${file.name}?")
-                .setPositiveButton("Record again") { _, _ -> start() }
+        if (shouldShowRequestPermissionRationale(permission)) {
+            val reason = when (permission) {
+                Manifest.permission.READ_CONTACTS -> "Contacts access lets you choose a person and resolve their saved contact."
+                Manifest.permission.WRITE_CONTACTS -> "Allow contact updates to set this person's ringtone."
+                Manifest.permission.RECORD_AUDIO -> "Microphone access is used only while recording a voice sample."
+                else -> "Storage access is needed on this Android version to publish the ringtone."
+            }
+            AlertDialog.Builder(this).setMessage(reason).setPositiveButton("Continue") { _, _ -> launch() }
                 .setNegativeButton("Cancel", null).show()
-        } else start()
+        } else launch()
     }
 
-    private fun playRecording() {
-        if (model.recording.value == true) return
-        val contact = model.selectedContact ?: return
-        stopAudio()
-        val file = model.recordingFile(contact)
-        if (!file.isFile) {
-            model.status.value = "No recording for ${contact.name} yet."
+    private fun perform(action: String?, id: String?, restored: RingtoneItem? = null) {
+        val item = restored ?: model.items.value.orEmpty().firstOrNull { it.id == id }
+        if (id != null && item == null) {
+            // Permission results can arrive before the library observer has restored its rows.
+            val uid = auth.currentUser?.uid ?: return
+            lifecycleScope.launch {
+                val saved = withContext(Dispatchers.IO) { RingtoneLibrary.get(this@MainActivity).get(uid, id) }
+                if (saved != null && auth.currentUser?.uid == uid) perform(action, id, saved)
+                else model.status.value = "Open this ringtone from its original Google account to continue."
+            }
             return
         }
-        try {
-            playLocalAudio(file, "recording for ${contact.name}")
-        } catch (e: Exception) {
-            stopAudio()
-            model.status.value = "Cannot play recording: ${e.message}"
+        when (action) {
+            "contacts" -> model.loadContacts()
+            "record" -> model.startRecording()
+            "chooseContact" -> item?.let(::chooseAssignmentContact)
+            "assignRead" -> request(Manifest.permission.WRITE_CONTACTS, "assignWrite", id)
+            "assignWrite" -> if (Build.VERSION.SDK_INT < 29) request(Manifest.permission.WRITE_EXTERNAL_STORAGE, "assign", id)
+                else item?.let { model.assign(it) }
+            "assign" -> item?.let { model.assign(it) }
         }
-    }
-
-    private fun playLocalAudio(file: File, description: String) {
-        val audio = MediaPlayer()
-        player = audio
-        audio.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build())
-        // MediaPlayer keeps its own descriptor, including for a preview cache file deleted after this call.
-        FileInputStream(file).use { audio.setDataSource(it.fd) }
-        audio.setOnPreparedListener {
-            if (player === it) {
-                handler.removeCallbacksAndMessages(null)
-                it.start()
-                model.status.value = "Playing $description"
-            }
-        }
-        audio.setOnCompletionListener {
-            if (player === it) { stopAudio(); model.status.value = "Playback finished." }
-        }
-        audio.setOnErrorListener { failed, what, extra ->
-            if (player === failed) {
-                stopAudio()
-                model.status.value = "Cannot play $description (player error $what / $extra)."
-            }
-            true
-        }
-        handler.postDelayed({
-            if (player === audio) { stopAudio(); model.status.value = "Audio playback timed out." }
-        }, 30_000)
-        audio.prepareAsync()
-    }
-
-    private fun stopAudio() {
-        previewTask?.cancel()
-        previewTask = null
-        handler.removeCallbacksAndMessages(null)
-        player?.release()
-        player = null
-        ringtone?.stop()
-        ringtone = null
-    }
-
-    private fun uploadRecording() {
-        if (uploading || model.recording.value == true) return
-        val contact = model.selectedContact ?: return
-        val file = model.recordingFile(contact)
-        if (!file.isFile) {
-            model.status.value = "No recording for ${contact.name} yet."
-            return
-        }
-        val user = auth.currentUser ?: run {
-            model.status.value = "Sign in before uploading."
-            return
-        }
-        uploading = true
-        updateControls()
-        lifecycleScope.launch {
-            var upload: UploadTask? = null
-            try {
-                val fileName = file.name
-                val storage = FirebaseStorage.getInstance(getString(R.string.upload_bucket_url))
-                val destination = storage.reference.child("users/${user.uid}/$fileName")
-                val metadata = StorageMetadata.Builder()
-                    .setContentType("audio/wav")
-                    .setCustomMetadata("uuid", UUID.randomUUID().toString())
-                    .build()
-                model.status.value = "Uploading recording for ${contact.name}…"
-                upload = destination.putFile(Uri.fromFile(file), metadata)
-                upload.await()
-                model.status.value = "Uploaded to ${destination.path}"
-            } catch (e: CancellationException) {
-                upload?.cancel()
-                throw e
-            } catch (e: Exception) {
-                model.status.value = "Upload failed: ${e.localizedMessage}"
-            } finally {
-                uploading = false
-                updateControls()
-            }
-        }
-    }
-
-    private fun updateSignInButton() {
-        val user = auth.currentUser
-        signInButton.text = if (user == null) "Sign in with Google"
-            else "Signed in as ${user.email ?: user.displayName ?: "Google user"}"
-        signInButton.isEnabled = user == null
     }
 
     private fun signIn() {
+        if (auth.currentUser != null) {
+            AlertDialog.Builder(this).setTitle("Google account").setMessage(auth.currentUser?.email)
+                .setPositiveButton("Sign out") { _, _ ->
+                    stopAudio()
+                    auth.signOut()
+                    updateAccount()
+                    lifecycleScope.launch {
+                        runCatching { CredentialManager.create(this@MainActivity).clearCredentialState(ClearCredentialStateRequest()) }
+                    }
+                }.setNegativeButton("Close", null).show()
+            return
+        }
         signInButton.isEnabled = false
         lifecycleScope.launch {
             try {
-                val option = GetSignInWithGoogleOption.Builder(
-                    getString(R.string.default_web_client_id)
-                ).build()
-                val request = GetCredentialRequest.Builder()
-                    .addCredentialOption(option)
-                    .build()
-                val credential = CredentialManager.create(this@MainActivity)
-                    .getCredential(this@MainActivity, request).credential
-                check(credential is CustomCredential &&
-                    credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                    "Unexpected sign-in credential."
-                }
-                val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
-                model.loadVoices()
-                updateControls()
+                val option = GetSignInWithGoogleOption.Builder(getString(R.string.default_web_client_id)).build()
+                val credential = CredentialManager.create(this@MainActivity).getCredential(this@MainActivity,
+                    GetCredentialRequest.Builder().addCredentialOption(option).build()).credential
+                check(credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL)
+                val token = GoogleIdTokenCredential.createFrom(credential.data).idToken
+                auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+            } catch (_: NoCredentialException) {
+                model.status.value = "No Google account is available. Add one in device settings, then sign in again."
             } catch (_: GetCredentialCancellationException) {
-                // Closing the account picker leaves the user signed out.
-            } catch (e: CancellationException) {
-                throw e
+                // Account picker dismissed.
             } catch (e: Exception) {
-                model.status.value = "Sign-in failed: ${e.localizedMessage}"
-            } finally {
-                updateSignInButton()
-            }
+                if (e is CancellationException) throw e
+                model.status.value = "Sign-in failed: ${e.message}"
+            } finally { updateAccount() }
         }
     }
 
+    private fun stopAudio() {
+        previewTask?.cancel(); previewTask = null
+        audio.stop()
+        previewFile?.delete(); previewFile = null
+    }
+
+    /** The draft scrolls with each section, leaving room on small and landscape windows. */
+    private fun workflowHeader(header: LinearLayout) {
+        val card = MaterialCardView(this).apply {
+            radius = dp(16).toFloat(); cardElevation = 0f; strokeWidth = dp(1)
+        }
+        val body = column(12)
+        summary = text("", 16)
+        next = button("", ::nextStep)
+        body.addView(summary); body.addView(next)
+        card.addView(body)
+        header.addView(card)
+        status = text(model.status.value.orEmpty(), 13).apply {
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        header.addView(status)
+    }
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+    private fun column(padding: Int = 0) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(padding), dp(padding), dp(padding), dp(padding))
+    }
+    private fun text(value: String, size: Int) = TextView(this).apply {
+        text = value; textSize = size.toFloat(); setPadding(0, dp(3), 0, dp(3))
+    }
+    private fun button(value: String, action: () -> Unit): Button = MaterialButton(this).apply {
+        text = value; isAllCaps = false
+        setOnClickListener { action() }
+        layoutParams = LinearLayout.LayoutParams(-1, -2)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::model.isInitialized && hasPermission(Manifest.permission.READ_CONTACTS)) model.loadContacts()
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putString("permission", pendingPermission)
+        outState.putInt("section", section); outState.putString("contactQuery", contactQuery)
+        outState.putString("permission", pendingPermission); outState.putString("action", pendingAction)
+        outState.putString("item", pendingItem)
         super.onSaveInstanceState(outState)
     }
 

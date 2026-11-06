@@ -1,0 +1,5 @@
+<resources>
+    <item name="section_contacts" type="id" />
+    <item name="section_voices" type="id" />
+    <item name="section_ringtones" type="id" />
+</resources>

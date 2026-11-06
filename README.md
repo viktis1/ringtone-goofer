@@ -1,47 +1,71 @@
 # Ringtone Goofer
 
-A small Android app using standard Views. No account or backend configuration is needed.
+An Android app for turning a contact and a voice sample into a personal ringtone.
 
-## Use
+## Workflow
 
-1. Load contacts and grant Contacts access. The overview shows every contact and their current ringtone.
-2. Tap a contact, then use **Play selected contact's ringtone** to listen.
-3. Choose a voice and its clip; **Preview clip** downloads the server's reference audio into a temporary app cache file and plays it locally. Stop audio, changing the selection, or leaving the screen cancels preview loading.
-4. **Generate ringtone** sends only the selected contact's name as `caller`, `receiver: "viktor"`, the voice/clip IDs, and a fresh UUID4.
-5. The app checks the returned status URL every four seconds, then downloads the WAV only after `done`.
-6. **Assign ringtone to [name]** requests contact write access and updates that contact. Select that contact and press Play again to listen.
+1. Sign in with Google, open **Contacts**, grant contacts access, and select a person.
+2. In **Voices**, select a voice clip and listen to a preview.
+3. Press **Generate ringtone**. The complete request is saved before submission.
+4. Open the item in **Ringtones** to track queue, script and audio stages.
+5. When ready, tap **Download ringtone**. The WAV is saved privately for offline listening.
+6. Tap **Listen**, then **Assign**. Assignment publishes the audio to Android's ringtone storage and updates the saved contact.
 
-Downloads are saved in shared storage under `Ringtones/RingtoneGoofer` using MediaStore, so Android's phone app can access them. Android 7–9 additionally require storage permission. No permission to change the phone's default ringtone is needed.
+You can leave or close the app between these steps. The last section, draft, request, status, audio and assignment state are retained on this installation. Selecting a different contact or voice never changes an existing generation.
 
-## Contact recordings
+## Recovery
 
-Select a contact and press **Record audio for selected contact**. Grant microphone access, speak, then press the same button (now **Stop and save recording**). **Play recorded audio for selected contact** plays the saved recording; **Stop audio** stops playback.
+- WorkManager schedules submission, status polling, downloads, recording uploads and assignment independently of the screen.
+- Every generation has a persisted UUID4. Retries reuse it; the backend deduplicates both API and cloud submissions.
+- If the API is unavailable during submission, the same request is uploaded to the configured Firebase bucket. A missing status while cloud ingestion is pending is a waiting state.
+- Network failures retry with backoff. Downloads write to a partial file and publish the complete private file only after WAV validation.
+- Permission and other actionable failures keep a retry checkpoint. A generation that failed on the server offers **Generate again**, with a fresh UUID.
+- Assignment stores a contact lookup URI, resolves merged contacts, and reuses already published MediaStore audio on retry.
+- Each Google account has a separate draft and library. Signing out pauses that account's work. Sign in again to resume.
+- Older submitted-job history is imported. Because old entries lack contact lookup URIs, select an assignment contact explicitly after downloading those items.
 
-Files are stored privately in `filesDir/recording/Contact-Name.wav`. Whitespace becomes hyphens, unsafe path characters are removed, and long names are shortened. There is no database; identical normalized names share a file, and renaming a contact changes the filename used for it. Recording again asks before replacement, and a failed recording preserves the previous file.
+Android can defer background work for connectivity, battery restrictions and quotas. Swiping the app away does not discard work. A force-stop prevents Android from running work until the app is opened again. Clearing app data or uninstalling removes the private library and downloads. This is installation persistence, not cross-device synchronization.
 
-Audio is uncompressed 44.1 kHz, 16-bit mono PCM WAV (about 5 MB per minute). Leaving the screen or rotating stops and saves the recording. Recordings stay on the device and are not sent to the generation API. No storage permission is needed for these private files.
+There is no backend cancellation endpoint. Closing the app or signing out does not cancel generation already accepted by the server.
+
+## Recordings
+
+**Contacts → Contact audio & voice recording** provides current-ringtone playback, recording, local playback and upload.
+
+Recording requires microphone access and stops/saves when the activity leaves the foreground. The format is mono, 44.1 kHz, 16-bit PCM WAV. A completed recording is written atomically, preserving the previous recording if capture fails. A killed process cannot continue microphone capture.
+
+Uploads use an immutable copy, a stable UUID in metadata and persistent background work. Refresh Voices after the server finishes ingesting a recording. The upload bucket and request bucket are configured in `strings.xml`.
 
 ## Code
 
-- `MainActivity.kt`: a scrollable screen, permission prompts, and audio playback.
-- `RingtoneViewModel.kt`: screen selections and the submit/poll/download flow.
-- `RingtoneApi.kt`: HTTP and the actual OpenAPI request fields.
-- `ContactRingtoneStore.kt`: contact queries, shared WAV storage, and assignment.
-- `Contacts.kt` and `Ringtones.kt` are the original, unused demo helpers.
+- `MainActivity.kt`: Contacts, Voices and Ringtones sections, permission prompts and account UI.
+- `RingtoneViewModel.kt`: draft selection and user actions; no generation polling tied to the screen.
+- `RingtoneLibrary.kt`: SQLite persistence, account isolation, migration and private audio paths.
+- `RingtoneWork.kt`: unique, restartable WorkManager operations.
+- `GenerationPipeline.kt`: bounded submission/status state machine, testable without Android or Firebase.
+- `RingtoneApi.kt`: authenticated HTTP, voice catalog, preview and WAV validation.
+- `ContactRingtoneStore.kt`: contacts, MediaStore publication and assignment.
+- `AudioPreview.kt`: foreground playback lifecycle.
+- `JobHistory.kt`: reader for migration from the old history format.
+- `Contacts.kt` and `Ringtones.kt`: unused original demo helpers.
 
-API reference: https://create-ringtone.viktor-homelab.cloud/docs  
-Schema: https://create-ringtone.viktor-homelab.cloud/openapi.json
+SQLite records and generated private audio live in `noBackupFilesDir`. Published ringtones live under `Ringtones/RingtoneGoofer`. Android 7–9 request storage permission only when publishing for assignment. Changing an individual contact's ringtone requires contacts permissions, not permission to change the system default.
 
-The response schemas are unconstrained JSON in OpenAPI; response fields follow the descriptions in that document and the live `/voices` response.
+The existing backend receiver name remains `viktor`. Firebase configuration and the Google web client ID must match the installed app's signing certificate.
 
-## Job behavior and limits
+Backend source: https://github.com/viktis1/homelab-k3s/tree/main/create-ringtone
 
-Rotation preserves the active job and selections through a ViewModel. Network requests have a 10-second connection timeout and 30-second read timeout. HTTP/server errors appear on screen. Each press of Generate creates a new UUID; there is no retry/resume job action.
-
-Cancel stops local monitoring and downloading; the API has no endpoint to cancel server work. An in-flight HTTP request may take until its timeout to release resources. Finishing the activity or process termination stops monitoring; job state is not persisted across app restarts. Completed WAV files remain available in ringtone storage.
+API docs: https://create-ringtone.viktor-homelab.cloud/docs
 
 ## Verification
 
-`./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug`
+```sh
+./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+./gradlew :app:connectedDebugAndroidTest
+```
 
-API tests use a local HTTP server to verify exact submission fields, UUID reuse, returned job URLs, voice/clip parsing, HTTP errors, and WAV downloads. Contact assignment and actual call playback should also be verified on a device with contacts.
+Local tests use fake HTTP and injected pipeline dependencies; they never submit work to the real backend. Recovery tests cover interruption after submission, uncertain responses, cloud-ingestion waits, bounded polling, failure handling and serialized download/assignment state.
+
+The instrumented database test opens a separate SQLite database, closes and reopens it at every workflow checkpoint, and checks draft persistence, account isolation and retained audio. It does not touch real contacts or the user's library.
+
+Device acceptance checks: generate and close the app; return while queued/running; download and close; reopen and listen offline; assign with denied/granted permissions; reopen and verify the contact's ringtone. Test recording uploads and actual incoming-call playback separately on a device.

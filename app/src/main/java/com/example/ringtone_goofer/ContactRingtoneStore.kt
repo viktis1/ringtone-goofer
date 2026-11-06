@@ -15,7 +15,7 @@ import java.io.File
 
 data class AddressBookContact(val lookupUri: Uri, val name: String, val ringtone: Uri?, val ringtoneName: String)
 
-/** Independent implementation; the original demo helpers are deliberately unused. */
+/** Contacts and shared ringtone publication. Call on Dispatchers.IO. */
 class ContactRingtoneStore(private val context: Context) {
     private val resolver get() = context.contentResolver
 
@@ -46,7 +46,26 @@ class ContactRingtoneStore(private val context: Context) {
     @Suppress("DEPRECATION")
     fun saveWav(file: File, id: String, name: String): Uri {
         if (Build.VERSION.SDK_INT < 29) requirePermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        val filename = "ringtone-$id.wav"
+        val safeId = id.replace(Regex("[^a-zA-Z0-9-]"), "")
+        require(safeId.isNotBlank()) { "Invalid ringtone ID" }
+        val filename = "ringtone-$safeId.wav"
+        val columns = mutableListOf(MediaStore.Audio.Media._ID)
+        if (Build.VERSION.SDK_INT >= 29) columns.add(MediaStore.Audio.Media.IS_PENDING)
+        resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, columns.toTypedArray(),
+            "${MediaStore.Audio.Media.DISPLAY_NAME}=?", arrayOf(filename), null)?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val existing = android.content.ContentUris.withAppendedId(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cursor.getLong(0))
+                val published = Build.VERSION.SDK_INT < 29 || cursor.getInt(1) == 0
+                val complete = runCatching {
+                    resolver.openFileDescriptor(existing, "r")?.use { it.statSize == file.length() } == true
+                }.getOrDefault(false)
+                if (published && complete) {
+                    return existing
+                }
+                resolver.delete(existing, null, null)
+            }
+        }
         val values = ContentValues().apply {
             put(MediaStore.Audio.Media.DISPLAY_NAME, filename)
             put(MediaStore.Audio.Media.TITLE, "Ringtone for $name")
