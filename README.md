@@ -34,7 +34,7 @@ There is no backend cancellation endpoint. Closing the app or signing out does n
 
 Recording requires microphone access and stops/saves when the activity leaves the foreground. The format is mono, 44.1 kHz, 16-bit PCM WAV. A completed recording is written atomically, preserving the previous recording if capture fails. A killed process cannot continue microphone capture.
 
-Uploads use an immutable copy, a stable UUID in metadata and persistent background work. Refresh voices in Generate after the server finishes ingesting a recording. The upload bucket and request bucket are configured in `strings.xml`.
+Uploads use an immutable local copy and persistent background work. The GCP object is named `users/{uid}/{contact-name}.wav`, without a UUID suffix, so uploading again overwrites that contact’s previous object. Names use the same safe filename normalization as local recordings. UUID metadata is retained for backend ingestion. Refresh voices in Generate after the server finishes ingesting a recording. The upload bucket and request bucket are configured in `strings.xml`.
 
 ## Code
 

@@ -118,8 +118,10 @@ class RingtoneWorker(context: Context, params: WorkerParameters) : CoroutineWork
                     val file = File(item.recordingPath)
                     check(file.isFile) { "Recording is no longer available." }
                     checkAccount()
+                    // The snapshot is unique locally; GCP keeps one overwriteable object per contact.
+                    val remoteName = contactRecordingFile(applicationContext.filesDir, item.contactName).name
                     val upload = FirebaseStorage.getInstance(applicationContext.getString(R.string.upload_bucket_url))
-                        .reference.child("users/$uid/${file.name}").putFile(Uri.fromFile(file),
+                        .reference.child("users/$uid/$remoteName").putFile(Uri.fromFile(file),
                             StorageMetadata.Builder().setContentType("audio/wav")
                                 .setCustomMetadata("uuid", item.id).build())
                     try { upload.await() } catch (e: CancellationException) { upload.cancel(); throw e }
