@@ -23,6 +23,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
     private val contactStore = ContactRingtoneStore(application)
     private val auth = FirebaseAuth.getInstance()
     private val voiceCache = VoiceCache(File(application.noBackupFilesDir, "voices"))
+    private val voiceRecordings = VoiceRecordings(File(application.noBackupFilesDir, "voice-recordings"))
     val contacts = MutableLiveData<List<AddressBookContact>>(emptyList())
     val voices = MutableLiveData<List<Voice>>(emptyList())
     val voiceRefreshError = MutableLiveData<String?>(null)
@@ -183,6 +184,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
                 check(auth.currentUser?.uid == user.uid) { "Account changed" }
                 user.getIdToken(false).await().token ?: error("Sign in again.")
             })
+            var restoring = false
             try {
                 val cached = withContext(Dispatchers.IO) { voiceCache.read(user.uid)?.let(client::parseVoices) }
                 ensureActive()
@@ -193,9 +195,13 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
                 ensureActive()
                 voices.value = fresh
                 if (fresh.isEmpty()) status.value = "No voices available. Upload a recording or refresh later."
+                restoring = true
+                val count = voiceRecordings.sync(user.uid, fresh, client::preview)
+                if (count > 0) status.value = "Restored $count voice recording(s) from the server."
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                voiceRefreshError.value = "Voices couldn't be refreshed. ${e.message ?: "Try again."}" +
+                val action = if (restoring) "Voice recordings couldn't be restored." else "Voices couldn't be refreshed."
+                voiceRefreshError.value = "$action ${e.message ?: "Try again."}" +
                     if (voices.value.isNullOrEmpty()) "" else " Your saved voices are still available."
             } finally {
                 refreshingVoices.value = false
@@ -261,6 +267,13 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
 
     fun recordingFile(contact: AddressBookContact): File =
         contactRecordingFile(getApplication<Application>().filesDir, contact.name)
+
+    fun savedRecordingFile(contact: AddressBookContact): File {
+        val local = recordingFile(contact)
+        return auth.currentUser?.uid?.let {
+            voiceRecordings.forContact(it, contact.name, voices.value.orEmpty(), local)
+        } ?: local
+    }
 
     fun startRecording() {
         if (recording.value == true) return

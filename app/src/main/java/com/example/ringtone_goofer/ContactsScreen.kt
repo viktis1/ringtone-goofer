@@ -145,7 +145,7 @@ internal class ContactsScreen(activity: MainActivity, var contactQuery: String =
         if (model.recording.value == true) return
         val contact = model.selectedContact ?: return
         activity.stopAudio()
-        val file = model.recordingFile(contact)
+        val file = model.savedRecordingFile(contact)
         if (file.isFile) {
             audio.play(Uri.fromFile(file), "recording for ${contact.name}")
             if (audio.isActive) contactPlayback = ContactPlayback.RECORDING

@@ -11,9 +11,11 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.time.Instant
+import java.time.OffsetDateTime
 import kotlin.coroutines.coroutineContext
 
-data class VoiceClip(val id: String, val name: String)
+data class VoiceClip(val id: String, val name: String, val createdAt: Instant? = null)
 data class Voice(val id: String, val name: String, val clips: List<VoiceClip>) {
     val category: String get() = id.substringBefore(':')
     val displayName: String get() = id.substringAfter(':').replace('_', ' ')
@@ -148,7 +150,8 @@ class RingtoneApi(
                 val clips = people.getJSONObject(contact).getJSONArray("clips")
                 Voice("$category:$contact", "$contact · $category", List(clips.length()) {
                     val clip = clips.getJSONObject(it)
-                    VoiceClip(clip.getString("id"), clip.getString("name"))
+                    VoiceClip(clip.getString("id"), clip.getString("name"),
+                        clip.optString("created_at").takeIf { it.isNotBlank() && it != "null" }?.let { date -> OffsetDateTime.parse(date).toInstant() })
                 })
             }
         }.toList()

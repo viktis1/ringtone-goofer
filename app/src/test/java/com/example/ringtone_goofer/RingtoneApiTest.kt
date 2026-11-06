@@ -59,6 +59,18 @@ class RingtoneApiTest {
         assertTrue(voices.getValue("Your Uploads:Alex").clips.isEmpty())
     }
 
+    @Test fun voiceTimestampsParseOffsetsAndFractionsAndAllowOldCaches() {
+        val response = JSONObject("""{"Your Uploads":{"Alex":{"clips":[
+            {"id":"new","name":"Alex.wav","created_at":"2026-11-06T12:30:00.123456+02:00"},
+            {"id":"old","name":"old.wav"},
+            {"id":"null","name":"null.wav","created_at":null}
+        ]}}}""")
+        val clips = api.parseVoices(response).single().clips
+        assertEquals(java.time.Instant.parse("2026-11-06T10:30:00.123456Z"), clips[0].createdAt)
+        assertNull(clips[1].createdAt)
+        assertNull(clips[2].createdAt)
+    }
+
     @Test fun requestsUseCurrentBearerToken() = runBlocking {
         val headers = mutableListOf<String?>()
         server.createContext("/voices") { exchange ->
