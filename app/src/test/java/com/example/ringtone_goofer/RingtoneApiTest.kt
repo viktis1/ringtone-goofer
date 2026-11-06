@@ -105,6 +105,36 @@ class RingtoneApiTest {
         }
     }
 
+    @Test fun statusPreservesGenerationStagesDurationsAndMetadata() = runBlocking {
+        respond("/status/details", """{"status":"running","error":null,"llm_status":"completed","llama_status":"done","tts_status":"running","llm_job_id":"llm-1","tts_job_id":"tts-1","llama_duration_seconds":2.5,"tts_duration_seconds":0,"receiver":"Viktor","caller":"Mille","voice_clip_path":"voices/mille.wav","script":"Mille is calling","output_key":null,"created_at":"2026-11-06T10:00:00Z"}""")
+        val result = api.status(GenerationJob("details", "/status/details", "/download/details", "queued"))
+        assertNull(result.error)
+        assertEquals("completed", result.scriptStatus)
+        assertEquals("done", result.llamaStatus)
+        assertEquals("running", result.audioStatus)
+        assertEquals(2.5, result.llamaDurationSeconds)
+        assertEquals(0.0, result.ttsDurationSeconds)
+        assertTrue(result.detail.contains("Script model (Llama) · done"))
+        assertTrue(result.metadata.contains("Mille is calling"))
+        assertTrue(result.metadata.contains("LLM job: llm-1"))
+        assertFalse(result.metadata.contains("null"))
+        val item = RingtoneItem("id", "uid", "", "Mille", "", "", "", "",
+            generationStatusJson = result.json().toString())
+        val restored = RingtoneItem.fromJson(JSONObject(item.json().toString())).generationStatus!!
+        assertEquals(result.detail, restored.detail)
+        assertEquals(result.metadata, restored.metadata)
+        assertEquals("voices/mille.wav", restored.json().getString("voice_clip_path"))
+    }
+
+    @Test fun statusHandlesMissingAndNullGenerationDetails() {
+        val result = GenerationStatus.fromJson(JSONObject("""{"status":"queued","llm_status":null,"llama_status":null,"tts_status":null,"llama_duration_seconds":null}"""))
+        assertEquals("Waiting for a generation slot", result.detail)
+        assertEquals("", result.metadata)
+        assertNull(result.llamaDurationSeconds)
+        assertNull(result.ttsDurationSeconds)
+        assertNull(RingtoneItem("id", "uid", "", "", "", "", "", "").generationStatus)
+    }
+
     @Test fun statusReadsFailureDetailFromReturnedStatusUrl() = runBlocking {
         respond("/status/server-id", """{"status":"failed","error":"GPU unavailable"}""")
         val status = api.status(GenerationJob("server-id", "/status/server-id", "/download/server-id", "queued"))

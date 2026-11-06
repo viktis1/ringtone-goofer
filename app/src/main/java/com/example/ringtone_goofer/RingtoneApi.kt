@@ -32,12 +32,50 @@ data class GenerationRequest(
     val jobId: String, val caller: String, val voiceId: String, val clipId: String
 )
 data class GenerationJob(val id: String, val statusUrl: String, val downloadUrl: String, val status: String)
-data class GenerationStatus(val status: String, val error: String?, val scriptStatus: String = "", val audioStatus: String = "") {
-    val detail: String get() = error ?: when {
-        audioStatus.isNotBlank() -> "Creating audio · $audioStatus"
-        scriptStatus.isNotBlank() -> "Writing script · $scriptStatus"
-        status == "queued" -> "Waiting for a generation slot"
-        else -> ""
+data class GenerationStatus(
+    val status: String, val error: String?, val scriptStatus: String = "",
+    val audioStatus: String = "", val llamaStatus: String = "",
+    val llamaDurationSeconds: Double? = null, val ttsDurationSeconds: Double? = null,
+    val responseJson: String = ""
+) {
+    val detail: String get() = buildList {
+        error?.takeIf { it.isNotBlank() }?.let { add(it) }
+        if (scriptStatus.isNotBlank()) add("Writing script (LLM) · $scriptStatus")
+        if (llamaStatus.isNotBlank()) add("Script model (Llama) · $llamaStatus")
+        if (audioStatus.isNotBlank()) add("Creating audio (TTS) · $audioStatus")
+        llamaDurationSeconds?.let { add("Script duration · $it s") }
+        ttsDurationSeconds?.let { add("Audio duration · $it s") }
+        if (isEmpty() && status == "queued") add("Waiting for a generation slot")
+    }.joinToString("\n")
+
+    fun json() = (if (responseJson.isBlank()) JSONObject() else JSONObject(responseJson)).apply {
+        put("status", status); put("error", error ?: JSONObject.NULL)
+        put("llm_status", scriptStatus); put("llama_status", llamaStatus); put("tts_status", audioStatus)
+        put("llama_duration_seconds", llamaDurationSeconds ?: JSONObject.NULL)
+        put("tts_duration_seconds", ttsDurationSeconds ?: JSONObject.NULL)
+    }
+
+    val metadata: String get() {
+        val response = json()
+        return listOf(
+            "llm_job_id" to "LLM job", "tts_job_id" to "TTS job",
+            "receiver" to "Receiver", "caller" to "Caller",
+            "voice_clip_path" to "Reference audio", "script" to "Generated script",
+            "output_key" to "Output", "created_at" to "Created on server"
+        ).mapNotNull { (key, label) ->
+            response.optString(key).takeIf { !response.isNull(key) && it.isNotBlank() }
+                ?.let { "$label: $it" }
+        }.joinToString("\n\n")
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): GenerationStatus {
+            fun text(key: String) = if (j.isNull(key)) "" else j.optString(key)
+            fun duration(key: String) = j.optDouble(key).takeIf { it.isFinite() && it >= 0 }
+            return GenerationStatus(j.getString("status"), text("error").takeIf { it.isNotBlank() },
+                text("llm_status"), text("tts_status"), text("llama_status"),
+                duration("llama_duration_seconds"), duration("tts_duration_seconds"), j.toString())
+        }
     }
 }
 class ApiHttpException(val code: Int, detail: String) : IOException("HTTP $code: $detail")
@@ -135,9 +173,7 @@ class RingtoneApi(
 
     suspend fun status(job: GenerationJob): GenerationStatus {
         val result = json(job.statusUrl)
-        return GenerationStatus(result.getString("status"),
-            result.optString("error").takeIf { it.isNotBlank() && it != "null" },
-            result.optString("llm_status"), result.optString("tts_status"))
+        return GenerationStatus.fromJson(result)
     }
 
     suspend fun download(job: GenerationJob, target: File) = request(job.downloadUrl) { connection ->

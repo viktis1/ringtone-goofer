@@ -33,7 +33,7 @@ suspend fun advanceGeneration(
             "queued", "running", "awaiting_worker", "failed" -> result.status
             else -> "failed"
         }
-        item = save { it.copy(stage = next, resumeStage = "", detail =
+        item = save { it.copy(stage = next, resumeStage = "", generationStatusJson = result.json().toString(), detail =
             if (next == "failed" && result.status != "failed") "Unrecognized server status: ${result.status}"
             else result.detail) }
         if (next in setOf("downloading", "failed")) return true

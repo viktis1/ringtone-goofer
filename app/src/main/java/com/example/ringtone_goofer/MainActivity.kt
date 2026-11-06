@@ -532,6 +532,15 @@ class MainActivity : AppCompatActivity() {
             if (item.clipName.isNotBlank()) body.addView(text(item.clipName.substringAfterLast('/'), 14))
             body.addView(text(item.label, 20))
             if (item.detail.isNotBlank()) body.addView(text(item.detail, 14))
+            item.generationStatus?.let { generation ->
+                body.addView(text("Generation · ${generation.status}", 16))
+                if (generation.detail.isNotBlank() && generation.detail != item.detail) {
+                    body.addView(text(generation.detail, 14))
+                }
+                if (generation.metadata.isNotBlank()) body.addView(text(generation.metadata, 14).apply {
+                    setTextIsSelectable(true)
+                })
+            }
             if (item.active) body.addView(ProgressBar(this))
             when (item.stage) {
                 "ready" -> body.addView(button("Download ringtone") { model.download(item) })

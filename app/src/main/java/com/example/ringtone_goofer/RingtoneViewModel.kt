@@ -241,7 +241,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         operation {
             check(auth.currentUser?.uid == item.uid)
             val next = item.copy(id = UUID.randomUUID().toString(), created = System.currentTimeMillis(),
-                stage = "submitting", route = "", detail = "", mediaUri = "", resumeStage = "")
+                stage = "submitting", route = "", detail = "", mediaUri = "", resumeStage = "", generationStatusJson = "")
             // A new UUID needs new server URLs.
             val normalized = next.id.replace("-", "")
             val request = next.copy(statusUrl = "/status/$normalized", downloadUrl = "/download/$normalized")

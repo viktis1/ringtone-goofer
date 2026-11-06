@@ -74,7 +74,10 @@ class GenerationPipelineTest {
             status = { checks++; GenerationStatus("running", null, "completed", "running") },
             save = { change -> change(disk).also { disk = reload(it) } }, pause = {}, maxChecks = 2))
         assertEquals(2, checks)
-        assertEquals("Creating audio · running", disk.detail)
+        assertTrue(disk.detail.contains("Writing script (LLM) · completed"))
+        assertTrue(disk.detail.contains("Creating audio (TTS) · running"))
+        assertEquals("completed", disk.generationStatus?.scriptStatus)
+        assertEquals("running", disk.generationStatus?.audioStatus)
         assertTrue(advanceGeneration(disk, submit = { error("Already submitted") },
             status = { GenerationStatus("failed", "GPU unavailable") },
             save = { change -> change(disk).also { disk = reload(it) } }, pause = {}))

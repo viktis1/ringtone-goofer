@@ -26,8 +26,12 @@ data class RingtoneItem(
     val detail: String = "",
     val mediaUri: String = "",
     val resumeStage: String = "",
-    val recordingPath: String = ""
+    val recordingPath: String = "",
+    val generationStatusJson: String = ""
 ) {
+    val generationStatus get() = generationStatusJson.takeIf { it.isNotBlank() }
+        ?.let { GenerationStatus.fromJson(JSONObject(it)) }
+
     fun serverJob() = GenerationJob(id.replace("-", ""), statusUrl, downloadUrl, stage)
     fun request() = GenerationRequest(id, contactName, voiceId, clipId)
 
@@ -60,6 +64,7 @@ data class RingtoneItem(
         put("created", created); put("stage", stage); put("route", route)
         put("statusUrl", statusUrl); put("downloadUrl", downloadUrl); put("detail", detail)
         put("mediaUri", mediaUri); put("resumeStage", resumeStage); put("recordingPath", recordingPath)
+        put("generationStatusJson", generationStatusJson)
     }
 
     companion object {
@@ -71,7 +76,8 @@ data class RingtoneItem(
             created = j.getLong("created"), stage = j.getString("stage"), route = j.optString("route"),
             statusUrl = j.getString("statusUrl"), downloadUrl = j.getString("downloadUrl"),
             detail = j.optString("detail"), mediaUri = j.optString("mediaUri"),
-            resumeStage = j.optString("resumeStage"), recordingPath = j.optString("recordingPath")
+            resumeStage = j.optString("resumeStage"), recordingPath = j.optString("recordingPath"),
+            generationStatusJson = j.optString("generationStatusJson")
         )
     }
 }
