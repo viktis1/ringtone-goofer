@@ -13,7 +13,7 @@ class RingtoneRequestUploadTest {
 
     @Test fun payloadMatchesWorkerAndPreservesSelectedIds() {
         val request = GenerationRequest(jobId, "Anne \"AJ\" & æ", "Your Uploads:Alex", "clip-uuid")
-        val json = JSONObject(RingtoneRequestUpload.payload(request).toString())
+        val json = JSONObject(request.payload().toString())
         assertEquals(setOf("receiver", "caller", "voice_id", "clip_id"), json.keys().asSequence().toSet())
         assertEquals("viktor", json.getString("receiver"))
         assertEquals(request.caller, json.getString("caller"))

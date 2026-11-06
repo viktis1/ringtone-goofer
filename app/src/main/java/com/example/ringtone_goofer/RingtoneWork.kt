@@ -152,12 +152,14 @@ class RingtoneWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 library.update(uid, id) { it.copy(detail = "Sign in to the original Google account to continue.") }
                 return@withContext Result.success()
             }
-            val transient = (e is IOException && e !is javax.net.ssl.SSLException &&
-                (e !is ApiHttpException || e.code in setOf(401, 408, 429) || e.code >= 500)) ||
-                e is com.google.firebase.FirebaseNetworkException ||
-                (e is com.google.firebase.storage.StorageException && e.errorCode in setOf(
-                    com.google.firebase.storage.StorageException.ERROR_RETRY_LIMIT_EXCEEDED,
-                    com.google.firebase.storage.StorageException.ERROR_NOT_AUTHENTICATED))
+            val transient = when (e) {
+                is ApiHttpException -> e.code in setOf(500, 503, 530)
+                is IOException -> e !is javax.net.ssl.SSLException
+                is com.google.firebase.FirebaseNetworkException -> true
+                is com.google.firebase.storage.StorageException ->
+                    e.errorCode == com.google.firebase.storage.StorageException.ERROR_RETRY_LIMIT_EXCEEDED
+                else -> false
+            }
             if (transient) {
                 library.update(uid, id) { it.copy(detail = "Will retry automatically: ${e.message}") }
                 Result.retry()

@@ -30,7 +30,10 @@ data class Voice(val id: String, val name: String, val clips: List<VoiceClip>) {
 }
 data class GenerationRequest(
     val jobId: String, val caller: String, val voiceId: String, val clipId: String
-)
+) {
+    fun payload() = JSONObject().put("receiver", "viktor").put("caller", caller)
+        .put("voice_id", voiceId).put("clip_id", clipId)
+}
 data class GenerationJob(val id: String, val statusUrl: String, val downloadUrl: String, val status: String)
 data class GenerationStatus(
     val status: String, val error: String?, val scriptStatus: String = "",
@@ -78,8 +81,11 @@ data class GenerationStatus(
         }
     }
 }
-class ApiHttpException(val code: Int, detail: String) : IOException("HTTP $code: $detail")
-class ApiConnectionException(cause: IOException) : IOException(cause.message, cause)
+class ApiHttpException(val code: Int, detail: String) : IOException(
+    if (code == 530) "Server is offline (HTTP 530)."
+    else "HTTP $code" + runCatching { JSONObject(detail).opt("detail") }
+        .getOrNull()?.let { ": $it" }.orEmpty()
+)
 
 /** Fields and paths follow the server's /openapi.json (including its prose response contracts). */
 class RingtoneApi(
@@ -121,9 +127,6 @@ class RingtoneApi(
             }
             coroutineContext.ensureActive()
             read(connection)
-        } catch (e: IOException) {
-            if (e is ApiHttpException || e is javax.net.ssl.SSLException) throw e
-            throw ApiConnectionException(e)
         } finally {
             connection.disconnect()
         }
@@ -156,17 +159,13 @@ class RingtoneApi(
         val clipId = URLEncoder.encode(clip.id, "UTF-8")
         request("/voice-preview?voice_id=$voiceId&clip_id=$clipId") { connection ->
             val type = connection.contentType.orEmpty().substringBefore(';')
-            if (type !in listOf("audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/wave")) {
-                throw IOException("Expected preview audio, received $type")
-            }
+            check(type in listOf("audio/mpeg", "audio/wav")) { "Expected preview audio, received $type" }
             copyAudio(connection, target)
         }
     }
 
     suspend fun generate(request: GenerationRequest): GenerationJob {
-        val result = json("/generate", JSONObject()
-            .put("job_id", request.jobId).put("caller", request.caller).put("receiver", "viktor")
-            .put("voice_id", request.voiceId).put("clip_id", request.clipId))
+        val result = json("/generate", request.payload().put("job_id", request.jobId))
         return GenerationJob(result.getString("job_id"), result.getString("status_url"),
             result.getString("download_url"), result.getString("status"))
     }
@@ -178,17 +177,13 @@ class RingtoneApi(
 
     suspend fun download(job: GenerationJob, target: File) = request(job.downloadUrl) { connection ->
         val type = connection.contentType.orEmpty().substringBefore(';')
-        if (type !in listOf("audio/wav", "audio/x-wav", "audio/wave", "application/octet-stream")) {
-            throw IOException("Expected WAV audio, received $type")
-        }
+        check(type == "audio/wav") { "Expected WAV audio, received $type" }
         copyAudio(connection, target)
         target.inputStream().use {
             val header = ByteArray(12)
-            if (it.read(header) != 12 ||
-                String(header, 0, 4, Charsets.US_ASCII) != "RIFF" ||
-                String(header, 8, 4, Charsets.US_ASCII) != "WAVE") {
-                throw IOException("Download is not a WAV file")
-            }
+            check(it.read(header) == 12 &&
+                String(header, 0, 4, Charsets.US_ASCII) == "RIFF" &&
+                String(header, 8, 4, Charsets.US_ASCII) == "WAVE") { "Download is not a WAV file" }
         }
     }
 
@@ -202,10 +197,10 @@ class RingtoneApi(
                     val count = input.read(buffer)
                     if (count < 0) break
                     total += count
-                    if (total > 100 * 1024 * 1024) throw IOException("Audio exceeds 100 MB")
+                    check(total <= 100 * 1024 * 1024) { "Audio exceeds 100 MB" }
                     output.write(buffer, 0, count)
                 }
-                if (total == 0L) throw IOException("Server returned empty audio")
+                check(total > 0) { "Server returned empty audio" }
             }
         }
     }

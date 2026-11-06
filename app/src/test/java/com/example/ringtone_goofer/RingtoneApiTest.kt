@@ -142,14 +142,25 @@ class RingtoneApiTest {
         assertEquals("GPU unavailable", status.error)
     }
 
-    @Test fun unavailableServerReturnsHttpError() = runBlocking {
-        respond("/voices", """{"detail":"Offline"}""", 503)
+    @Test fun authenticationServiceFailureKeepsBackendDetail() = runBlocking {
+        respond("/voices", """{"detail":"Authentication unavailable"}""", 503)
         try {
             api.voices()
             fail("Expected HTTP failure")
         } catch (e: IOException) {
             assertTrue(e.message.orEmpty().contains("503"))
-            assertTrue(e.message.orEmpty().contains("Offline"))
+            assertTrue(e.message.orEmpty().contains("Authentication unavailable"))
+        }
+    }
+
+    @Test fun offline530DoesNotExposeCloudflareHtml() = runBlocking {
+        respond("/voices", "<html>Origin is offline</html>", 530, "text/html")
+        try {
+            api.voices()
+            fail("Expected HTTP failure")
+        } catch (e: ApiHttpException) {
+            assertEquals(530, e.code)
+            assertEquals("Server is offline (HTTP 530).", e.message)
         }
     }
 
@@ -178,15 +189,15 @@ class RingtoneApiTest {
     }
 
     @Test fun previewSurfacesServerErrorInsteadOfPassingItToPlayer() = runBlocking {
-        respond("/voice-preview", """{"detail":"Clip missing"}""", 404)
+        respond("/voice-preview", "Internal Server Error", 500, "text/plain")
         val target = File.createTempFile("preview-test", ".audio")
         try {
             try {
                 api.preview(Voice("voice", "Voice", emptyList()), VoiceClip("missing", "Missing"), target)
                 fail("Expected preview HTTP failure")
             } catch (e: IOException) {
-                assertTrue(e.message.orEmpty().contains("404"))
-                assertTrue(e.message.orEmpty().contains("Clip missing"))
+                assertTrue(e.message.orEmpty().contains("500"))
+                assertFalse(e.message.orEmpty().contains("Internal Server Error"))
             }
             assertEquals(0L, target.length())
         } finally { target.delete() }
@@ -202,7 +213,7 @@ class RingtoneApiTest {
             try {
                 api.download(GenerationJob("bad", "/status/bad", "/download/bad", "done"), target)
                 fail("Expected invalid content rejection")
-            } catch (e: IOException) {
+            } catch (e: IllegalStateException) {
                 assertTrue(e.message.orEmpty().contains("Expected WAV"))
             }
         } finally { target.delete() }

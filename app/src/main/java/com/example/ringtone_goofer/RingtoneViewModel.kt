@@ -87,6 +87,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
                 ensureActive()
                 draft.value = saved
                 loaded.value = true
+                status.value = "Choose a contact to get started."
                 loadVoices()
                 library.revision.collect {
                     val rows = withContext(Dispatchers.IO) { library.items(uid) }
@@ -127,16 +128,11 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
             clipId = if (keepVoice) current.clipId else ""))
     }
 
-    fun selectVoice(voice: Voice) {
-        if (!voice.isAvailableForRecipient(draft.value?.contactName.orEmpty())) return
-        if (draft.value?.voiceId != voice.id) {
-            saveDraft(draft.value!!.copy(voiceId = voice.id, clipId = ""))
-        }
-    }
-
-    fun selectVoice(voice: Voice, clip: VoiceClip) {
-        if (!voice.isAvailableForRecipient(draft.value?.contactName.orEmpty())) return
-        saveDraft(draft.value!!.copy(voiceId = voice.id, clipId = clip.id))
+    fun selectVoice(voice: Voice, clip: VoiceClip? = null) {
+        val current = draft.value ?: return
+        if (!voice.isAvailableForRecipient(current.contactName)) return
+        if (clip == null && current.voiceId == voice.id) return
+        saveDraft(current.copy(voiceId = voice.id, clipId = clip?.id.orEmpty()))
     }
 
     fun loadContacts() {
@@ -144,28 +140,34 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         loadingContacts = true
         viewModelScope.launch {
             try {
-                val savedUri = draft.value?.contactUri.orEmpty()
-                val (rows, resolved) = withContext(Dispatchers.IO) {
-                    val rows = contactStore.contacts()
-                    val direct = rows.firstOrNull { it.lookupUri.toString() == savedUri }
-                    val resolved = direct ?: if (savedUri.isNotBlank()) {
-                        val uri = android.provider.ContactsContract.Contacts.lookupContact(
-                            getApplication<Application>().contentResolver, android.net.Uri.parse(savedUri))
-                        rows.firstOrNull { uri != null && it.lookupUri.lastPathSegment == uri.lastPathSegment }
-                    } else null
-                    rows to resolved
-                }
-                contacts.value = rows
-                if (draft.value?.contactUri == savedUri && resolved != null) {
-                    saveDraft(draft.value!!.copy(contactUri = resolved.lookupUri.toString(), contactName = resolved.name))
-                }
-                if (contacts.value.isNullOrEmpty()) status.value = "No contacts found."
+                refreshContacts()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 contacts.value = emptyList()
                 status.value = "Cannot load contacts: ${e.message}"
             } finally { loadingContacts = false }
         }
+    }
+
+    /** Refresh once for either contact picker or the Contacts tab; call on the main dispatcher. */
+    suspend fun refreshContacts(): List<AddressBookContact> {
+        val savedUri = draft.value?.contactUri.orEmpty()
+        val (rows, resolved) = withContext(Dispatchers.IO) {
+            val rows = contactStore.contacts()
+            val direct = rows.firstOrNull { it.lookupUri.toString() == savedUri }
+            val resolved = direct ?: if (savedUri.isNotBlank()) {
+                val uri = android.provider.ContactsContract.Contacts.lookupContact(
+                    getApplication<Application>().contentResolver, android.net.Uri.parse(savedUri))
+                rows.firstOrNull { uri != null && it.lookupUri.lastPathSegment == uri.lastPathSegment }
+            } else null
+            rows to resolved
+        }
+        contacts.value = rows
+        if (draft.value?.contactUri == savedUri && resolved != null) {
+            saveDraft(draft.value!!.copy(contactUri = resolved.lookupUri.toString(), contactName = resolved.name))
+        }
+        if (rows.isEmpty()) status.value = "No contacts found."
+        return rows
     }
 
     fun loadVoices() {
@@ -193,7 +195,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
                 if (fresh.isEmpty()) status.value = "No voices available. Upload a recording or refresh later."
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                voiceRefreshError.value = "Voices couldn't be refreshed. Check your connection and try again." +
+                voiceRefreshError.value = "Voices couldn't be refreshed. ${e.message ?: "Try again."}" +
                     if (voices.value.isNullOrEmpty()) "" else " Your saved voices are still available."
             } finally {
                 refreshingVoices.value = false

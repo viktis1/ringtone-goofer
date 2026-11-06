@@ -18,21 +18,20 @@ class GenerationSubmissionTest {
     }
 
     @Test fun unavailableServerUploadsSameRequestOnce() = runBlocking {
-        for (failure in listOf(ApiConnectionException(IOException("timeout")), ApiHttpException(503, "offline"))) {
-            val uploads = mutableListOf<GenerationRequest>()
-            val result = submitGeneration(request, { throw failure }, { uploads.add(it) })
-            assertEquals(listOf(request), uploads)
-            assertEquals("Upload", result.route)
-            assertEquals("/status/12345678123442348234123456789abc", result.job.statusUrl)
-            assertEquals("awaiting_worker", result.job.status)
-        }
+        val uploads = mutableListOf<GenerationRequest>()
+        val result = submitGeneration(request,
+            { throw ApiHttpException(530, "<html>Origin is offline</html>") }, { uploads.add(it) })
+        assertEquals(listOf(request), uploads)
+        assertEquals("Upload", result.route)
+        assertEquals("/status/12345678123442348234123456789abc", result.job.statusUrl)
+        assertEquals("awaiting_worker", result.job.status)
     }
 
     @Test fun rejectedMalformedAuthAndCancelledRequestsDoNotUpload() = runBlocking {
-        for (failure in listOf(ApiHttpException(400, "bad"), ApiHttpException(401, "auth"),
-            ApiHttpException(403, "denied"), ApiHttpException(404, "missing"),
-            ApiHttpException(422, "invalid"), ApiHttpException(429, "limit"),
-            IOException("token unavailable"), JSONException("bad JSON"),
+        for (failure in listOf(ApiHttpException(401, "auth"), ApiHttpException(404, "missing"),
+            ApiHttpException(409, "not complete"), ApiHttpException(422, "invalid"),
+            ApiHttpException(500, "server error"), ApiHttpException(503, "authentication unavailable"),
+            IOException("connection failed"), JSONException("bad JSON"),
             CancellationException("cancelled"), javax.net.ssl.SSLException("certificate"))) {
             try {
                 submitGeneration(request, { throw failure }, { fail("Unexpected upload for $failure") })
@@ -44,7 +43,7 @@ class GenerationSubmissionTest {
     @Test fun uploadFailureIsReportedWithoutRetryingSubmission() = runBlocking {
         val failure = IOException("storage unavailable")
         try {
-            submitGeneration(request, { throw ApiHttpException(502, "offline") }, { throw failure })
+            submitGeneration(request, { throw ApiHttpException(530, "offline") }, { throw failure })
             fail("Expected upload failure")
         } catch (e: IOException) { assertSame(failure, e) }
     }

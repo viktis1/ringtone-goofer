@@ -2,9 +2,6 @@ package com.example.ringtone_goofer
 
 data class GenerationSubmission(val job: GenerationJob, val route: String)
 
-fun Throwable.isServerUnavailable(): Boolean =
-    this is ApiConnectionException || (this is ApiHttpException && code in 500..599)
-
 /** Only submission failures can trigger upload; reuse the UUID if the HTTP result was uncertain. */
 suspend fun submitGeneration(
     request: GenerationRequest,
@@ -13,8 +10,8 @@ suspend fun submitGeneration(
 ): GenerationSubmission {
     val job = try {
         api(request)
-    } catch (e: Exception) {
-        if (!e.isServerUnavailable()) throw e
+    } catch (e: ApiHttpException) {
+        if (e.code != 530) throw e
         upload(request)
         val id = request.jobId.replace("-", "")
         return GenerationSubmission(
