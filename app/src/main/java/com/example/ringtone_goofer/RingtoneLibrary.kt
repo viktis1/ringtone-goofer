@@ -126,6 +126,13 @@ class RingtoneLibrary internal constructor(context: Context, databaseName: Strin
         revision.value++
     }
 
+    /** Recovered call handoffs must preserve any progress already made by the ringtone worker. */
+    @Synchronized fun putIfAbsent(item: RingtoneItem): RingtoneItem {
+        get(item.uid, item.id)?.let { return it }
+        put(item)
+        return item
+    }
+
     @Synchronized fun update(uid: String, id: String, change: (RingtoneItem) -> RingtoneItem): RingtoneItem {
         val next = change(requireNotNull(get(uid, id)) { "Ringtone no longer exists" })
         check(helper.writableDatabase.update("items", ContentValues().apply {

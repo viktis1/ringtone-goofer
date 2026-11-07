@@ -162,8 +162,9 @@ class MainActivity : AppCompatActivity() {
 
     internal fun runAction(action: ScreenAction, id: String? = null) {
         val permissions = when (action) {
-            ScreenAction.CALL_HISTORY -> listOf(Manifest.permission.READ_PHONE_STATE,
-                Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CONTACTS)
+            ScreenAction.CALL_HISTORY -> listOfNotNull(Manifest.permission.READ_PHONE_STATE,
+                Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE.takeIf { Build.VERSION.SDK_INT < 29 })
             ScreenAction.RECORD -> listOf(Manifest.permission.RECORD_AUDIO)
             ScreenAction.GENERATE, ScreenAction.ASSIGN -> listOfNotNull(
                 Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS,
@@ -203,7 +204,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         when (action) {
-            ScreenAction.CALL_HISTORY -> { model.status.value = "Incoming call history enabled. Calls update History without generation."; currentScreen?.refresh?.invoke() }
+            ScreenAction.CALL_HISTORY -> { model.status.value = "Automatic call ringtones enabled. Incoming calls use the caller’s newest uploaded clip, or a random famous person clip."; currentScreen?.refresh?.invoke() }
             ScreenAction.CONTACTS -> model.loadContacts()
             ScreenAction.RECIPIENT -> generateTab.chooseGenerationContact()
             ScreenAction.GENERATE -> {

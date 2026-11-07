@@ -34,24 +34,34 @@ internal data class CallSession(
     }
 }
 
-internal data class CallHistoryEntry(val id: String, val caller: String, val received: Long) {
-    val message get() = "received a call from $caller. History updated, but no generation"
+internal data class CallHistoryEntry(val id: String, val caller: String, val received: Long,
+    val detail: String = "History updated, but no generation") {
+    val message get() = "received a call from $caller. $detail"
 }
 
-/** Local device history, deliberately independent of Firebase accounts and generation jobs. */
-internal class IncomingCallHistory private constructor(private val context: Context) {
+internal data class CallContact(val name: String, val uri: String)
+
+/** Local call history and an outbox committed atomically with each completed call. */
+internal class IncomingCallHistory internal constructor(private val context: Context,
+    databaseName: String = "incoming-calls.db") {
     private val helper = object : SQLiteOpenHelper(context,
-        File(context.noBackupFilesDir, "incoming-calls.db").absolutePath, null, 1) {
+        File(context.noBackupFilesDir, databaseName).absolutePath, null, 2) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("CREATE TABLE session (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)")
-            db.execSQL("CREATE TABLE calls (id TEXT PRIMARY KEY, caller TEXT NOT NULL, received INTEGER NOT NULL)")
+            db.execSQL("CREATE TABLE calls (id TEXT PRIMARY KEY, caller TEXT NOT NULL, received INTEGER NOT NULL, detail TEXT NOT NULL, pending TEXT NOT NULL)")
         }
-        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            if (oldVersion < 2) {
+                db.execSQL("ALTER TABLE calls ADD COLUMN detail TEXT NOT NULL DEFAULT 'History updated, but no generation'")
+                db.execSQL("ALTER TABLE calls ADD COLUMN pending TEXT NOT NULL DEFAULT ''")
+            }
+        }
     }
     val revision = MutableStateFlow(0L)
 
     @Synchronized
-    fun accept(state: String, number: String, time: Long) {
+    fun accept(state: String, number: String, time: Long,
+        plan: (IncomingCall, CallContact?) -> CallGenerationPlan) {
         val db = helper.writableDatabase
         db.beginTransaction()
         try {
@@ -62,8 +72,12 @@ internal class IncomingCallHistory private constructor(private val context: Cont
             }
             val transition = session.advance(state, number, time, UUID.randomUUID().toString())
             transition.completed?.let { call ->
+                val contact = resolveContact(call.number)
+                val generation = plan(call, contact)
                 db.insertWithOnConflict("calls", null, ContentValues().apply {
-                    put("id", call.id); put("caller", resolveCaller(call.number)); put("received", call.received)
+                    put("id", call.id); put("caller", contact?.name ?: call.number.ifBlank { "Unknown caller" })
+                    put("received", call.received); put("detail", generation.detail)
+                    put("pending", generation.item?.json()?.toString().orEmpty())
                 }, SQLiteDatabase.CONFLICT_IGNORE)
             }
             val next = transition.session
@@ -79,20 +93,43 @@ internal class IncomingCallHistory private constructor(private val context: Cont
 
     @Synchronized
     fun entries(): List<CallHistoryEntry> = helper.readableDatabase
-        .rawQuery("SELECT id,caller,received FROM calls ORDER BY received DESC", null).use { cursor ->
+        .rawQuery("SELECT id,caller,received,detail FROM calls ORDER BY received DESC", null).use { cursor ->
             buildList { while (cursor.moveToNext()) add(CallHistoryEntry(
-                cursor.getString(0), cursor.getString(1), cursor.getLong(2))) }
+                cursor.getString(0), cursor.getString(1), cursor.getLong(2), cursor.getString(3))) }
         }
 
-    private fun resolveCaller(number: String): String {
-        if (number.isBlank()) return "Unknown caller"
+    @Synchronized
+    fun hasActiveCall(): Boolean = helper.readableDatabase
+        .rawQuery("SELECT payload FROM session WHERE id=1", null).use {
+            it.moveToFirst() && JSONObject(it.getString(0)).optString("id").isNotBlank()
+        }
+
+    @Synchronized
+    fun pending(): List<RingtoneItem> = helper.readableDatabase
+        .rawQuery("SELECT pending FROM calls WHERE pending != ''", null).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(RingtoneItem.fromJson(JSONObject(cursor.getString(0)))) }
+        }
+
+    @Synchronized
+    fun markDispatched(id: String) {
+        helper.writableDatabase.update("calls", ContentValues().apply { put("pending", "") }, "id=?", arrayOf(id))
+    }
+
+    internal fun close() = helper.close()
+
+    private fun resolveContact(number: String): CallContact? {
+        if (number.isBlank()) return null
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CONTACTS) !=
-            PackageManager.PERMISSION_GRANTED) return number
+            PackageManager.PERMISSION_GRANTED) return null
         return try {
             val uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number))
-            context.contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)
-                ?.use { if (it.moveToFirst()) it.getString(0)?.takeIf(String::isNotBlank) else null } ?: number
-        } catch (_: SecurityException) { number }
+            context.contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup._ID,
+                ContactsContract.PhoneLookup.LOOKUP_KEY, ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)
+                ?.use {
+                    if (it.moveToFirst()) CallContact(it.getString(2).orEmpty(),
+                        ContactsContract.Contacts.getLookupUri(it.getLong(0), it.getString(1)).toString()) else null
+                }
+        } catch (_: SecurityException) { null }
     }
 
     companion object {

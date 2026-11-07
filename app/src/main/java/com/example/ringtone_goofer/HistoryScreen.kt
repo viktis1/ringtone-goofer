@@ -20,8 +20,9 @@ internal class HistoryScreen(activity: MainActivity) : TabScreen(activity) {
         val header = column(16)
         header.addView(text("History", 22))
         activity.statusHeader(header)
-        val enableCalls = button("Enable incoming call history") { activity.runAction(ScreenAction.CALL_HISTORY) }
+        val enableCalls = button("Enable automatic call ringtones") { activity.runAction(ScreenAction.CALL_HISTORY) }
         header.addView(enableCalls)
+        header.addView(text("Answered and missed incoming calls use the caller’s newest uploaded clip, or a random famous person clip, to generate and set their ringtone.", 14))
         val calls = column()
         header.addView(calls)
         header.addView(text("Generation and downloads continue in the background. Tap an item to download, listen or assign.", 14))
@@ -44,7 +45,10 @@ internal class HistoryScreen(activity: MainActivity) : TabScreen(activity) {
         }
         refresh = {
             enableCalls.visibility = if (activity.hasPermission(Manifest.permission.READ_PHONE_STATE) &&
-                activity.hasPermission(Manifest.permission.READ_CALL_LOG)) View.GONE else View.VISIBLE
+                activity.hasPermission(Manifest.permission.READ_CALL_LOG) &&
+                activity.hasPermission(Manifest.permission.READ_CONTACTS) &&
+                activity.hasPermission(Manifest.permission.WRITE_CONTACTS) &&
+                (android.os.Build.VERSION.SDK_INT >= 29 || activity.hasPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE))) View.GONE else View.VISIBLE
             calls.removeAllViews()
             model.callHistory.value.orEmpty().forEach { entry ->
                 calls.addView(text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)

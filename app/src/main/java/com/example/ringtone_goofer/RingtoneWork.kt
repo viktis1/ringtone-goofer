@@ -34,8 +34,8 @@ object RingtoneWork {
         else -> null
     }
 
-    fun enqueue(context: Context, item: RingtoneItem, explicit: Boolean = false) {
-        val action = action(item) ?: return
+    fun enqueue(context: Context, item: RingtoneItem, explicit: Boolean = false): androidx.work.Operation? {
+        val action = action(item) ?: return null
         val request = OneTimeWorkRequestBuilder<RingtoneWorker>()
             .setInputData(workDataOf("uid" to item.uid, "id" to item.id, "action" to action))
             .setConstraints(Constraints.Builder().apply {
@@ -44,7 +44,7 @@ object RingtoneWork {
             .setBackoffCriteria(BackoffPolicy.LINEAR, 10, TimeUnit.SECONDS)
             .addTag("ringtone:${item.uid}")
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork("ringtone:${item.uid}:${item.id}:$action",
+        return WorkManager.getInstance(context).enqueueUniqueWork("ringtone:${item.uid}:${item.id}:$action",
             if (explicit) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP, request)
     }
 }
