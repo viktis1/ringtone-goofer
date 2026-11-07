@@ -55,7 +55,8 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val calls = IncomingCallHistory.get(application)
             calls.revision.collect {
-                callHistory.value = withContext(Dispatchers.IO) { calls.entries() }
+                val entries: List<CallHistoryEntry> = withContext(Dispatchers.IO) { calls.entries() }
+                callHistory.value = entries
             }
         }
         // A single consumer preserves rapid contact/voice changes in exactly their UI order.
