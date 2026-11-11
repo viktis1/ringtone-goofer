@@ -27,13 +27,14 @@ data class RingtoneItem(
     val mediaUri: String = "",
     val resumeStage: String = "",
     val recordingPath: String = "",
-    val generationStatusJson: String = ""
+    val generationStatusJson: String = "",
+    val language: String = "auto"
 ) {
     val generationStatus get() = generationStatusJson.takeIf { it.isNotBlank() }
         ?.let { GenerationStatus.fromJson(JSONObject(it)) }
 
     fun serverJob() = GenerationJob(id.replace("-", ""), statusUrl, downloadUrl, stage)
-    fun request() = GenerationRequest(id, contactName, voiceId, clipId)
+    fun request() = GenerationRequest(id, contactName, voiceId, clipId, language)
 
     /** Persist assignment intent with the original target before scheduling the next worker. */
     fun afterDownload() = copy(
@@ -64,7 +65,7 @@ data class RingtoneItem(
         put("created", created); put("stage", stage); put("route", route)
         put("statusUrl", statusUrl); put("downloadUrl", downloadUrl); put("detail", detail)
         put("mediaUri", mediaUri); put("resumeStage", resumeStage); put("recordingPath", recordingPath)
-        put("generationStatusJson", generationStatusJson)
+        put("generationStatusJson", generationStatusJson); put("language", language)
     }
 
     companion object {
@@ -77,20 +78,21 @@ data class RingtoneItem(
             statusUrl = j.getString("statusUrl"), downloadUrl = j.getString("downloadUrl"),
             detail = j.optString("detail"), mediaUri = j.optString("mediaUri"),
             resumeStage = j.optString("resumeStage"), recordingPath = j.optString("recordingPath"),
-            generationStatusJson = j.optString("generationStatusJson")
+            generationStatusJson = j.optString("generationStatusJson"),
+            language = j.optString("language", "auto")
         )
     }
 }
 
 data class RingtoneDraft(
     val contactUri: String = "", val contactName: String = "",
-    val voiceId: String = "", val clipId: String = ""
+    val voiceId: String = "", val clipId: String = "", val language: String = "auto"
 ) {
     fun json() = JSONObject().put("contactUri", contactUri).put("contactName", contactName)
-        .put("voiceId", voiceId).put("clipId", clipId)
+        .put("voiceId", voiceId).put("clipId", clipId).put("language", language)
     companion object {
         fun fromJson(j: JSONObject) = RingtoneDraft(j.optString("contactUri"), j.optString("contactName"),
-            j.optString("voiceId"), j.optString("clipId"))
+            j.optString("voiceId"), j.optString("clipId"), j.optString("language", "auto"))
     }
 }
 

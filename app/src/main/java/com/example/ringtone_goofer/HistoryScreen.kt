@@ -208,15 +208,23 @@ internal class HistoryScreen(activity: MainActivity) : TabScreen(activity) {
             body.addView(text(item.voiceName, 18))
             if (item.clipName.isNotBlank()) body.addView(text(item.clipName.substringAfterLast('/'), 14))
             body.addView(text(item.label, 20))
-            if (item.detail.isNotBlank()) body.addView(text(item.detail, 14))
+            if (item.detail.isNotBlank() && item.generationStatus == null) {
+                body.addView(text(item.detail, 14))
+            }
             item.generationStatus?.let { generation ->
-                body.addView(text("Generation · ${generation.status}", 16))
-                if (generation.detail.isNotBlank() && generation.detail != item.detail) {
-                    body.addView(text(generation.detail, 14))
+                val fields = column().apply {
+                    dividerDrawable = historyDivider()
+                    showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
                 }
-                if (generation.metadata.isNotBlank()) body.addView(text(generation.metadata, 14).apply {
-                    setTextIsSelectable(true)
-                })
+                for ((key, value) in generation.responseFields) {
+                    fields.addView(column(8).apply {
+                        addView(text(key.replace('_', ' ').replaceFirstChar { it.titlecase() }, 14).apply {
+                            setTypeface(typeface, Typeface.BOLD)
+                        })
+                        addView(text(value, 15).apply { setTextIsSelectable(true) })
+                    })
+                }
+                body.addView(fields)
             }
             if (item.active) body.addView(ProgressBar(this))
             when (item.stage) {
@@ -244,7 +252,7 @@ internal class HistoryScreen(activity: MainActivity) : TabScreen(activity) {
             }
             body.addView(text("Job ${item.id}" + if (item.route.isBlank()) "" else "\nSubmitted via ${item.route}", 12).apply { setTextIsSelectable(true) })
         }
-        dialog.observeUntilDismissed(activity, model.items) {
+        dialog.observeUntilDismissed(activity, model.items, onDismiss = { activity.stopAudio() }) {
             render(model.items.value.orEmpty().firstOrNull { it.id == initial.id } ?: initial)
         }
         dialog.show()

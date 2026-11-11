@@ -107,7 +107,8 @@ class RingtoneApiTest {
         assertEquals("/status/returned-id", job.statusUrl)
         assertEquals("/download/returned-id", job.downloadUrl)
         bodies.forEach {
-            assertEquals(setOf("job_id", "caller", "receiver", "voice_id", "clip_id"), it.keys().asSequence().toSet())
+            assertEquals(setOf("job_id", "caller", "receiver", "voice_id", "clip_id", "language"), it.keys().asSequence().toSet())
+            assertEquals("auto", it.getString("language"))
             assertEquals(request.jobId, it.getString("job_id"))
             assertEquals(4, UUID.fromString(it.getString("job_id")).version())
             assertEquals(request.caller, it.getString("caller"))
@@ -127,21 +128,39 @@ class RingtoneApiTest {
         assertEquals(2.5, result.llamaDurationSeconds)
         assertEquals(0.0, result.ttsDurationSeconds)
         assertTrue(result.detail.contains("Script model (Llama) · done"))
-        assertTrue(result.metadata.contains("Mille is calling"))
-        assertTrue(result.metadata.contains("LLM job: llm-1"))
-        assertFalse(result.metadata.contains("null"))
+        assertTrue(result.responseFields.contains("script" to "Mille is calling"))
+        assertTrue(result.responseFields.contains("llm_job_id" to "llm-1"))
+        assertTrue(result.responseFields.contains("output_key" to "Not set"))
         val item = RingtoneItem("id", "uid", "", "Mille", "", "", "", "",
             generationStatusJson = result.json().toString())
         val restored = RingtoneItem.fromJson(JSONObject(item.json().toString())).generationStatus!!
         assertEquals(result.detail, restored.detail)
-        assertEquals(result.metadata, restored.metadata)
+        assertEquals(result.responseFields, restored.responseFields)
         assertEquals("voices/mille.wav", restored.json().getString("voice_clip_path"))
+    }
+
+    @Test fun fullResponseIncludesNewAndNestedServerFieldsAfterRestore() {
+        val response = JSONObject("""{"status":"running","llm_translate_status":"completed","script_generation_duration_seconds":3.75,"language":"French","error":null,"extra":{"attempt":2},"steps":["translate","script"]}""")
+        val status = GenerationStatus.fromJson(response)
+        val item = RingtoneItem("id", "uid", "", "", "", "", "", "",
+            generationStatusJson = status.json().toString())
+        val restored = RingtoneItem.fromJson(JSONObject(item.json().toString())).generationStatus!!
+        assertEquals(status.responseFields, restored.responseFields)
+        val fields = restored.responseFields.toMap()
+        assertEquals("completed", fields["llm_translate_status"])
+        assertEquals("3.75", fields["script_generation_duration_seconds"])
+        assertEquals("French", fields["language"])
+        assertEquals("Not set", fields["error"])
+        assertEquals("2", fields["extra · attempt"])
+        assertEquals("translate", fields["steps · 1"])
+        assertEquals("script", fields["steps · 2"])
+        assertFalse(fields.containsKey("llama_status"))
     }
 
     @Test fun statusHandlesMissingAndNullGenerationDetails() {
         val result = GenerationStatus.fromJson(JSONObject("""{"status":"queued","llm_status":null,"llama_status":null,"tts_status":null,"llama_duration_seconds":null}"""))
         assertEquals("Waiting for a generation slot", result.detail)
-        assertEquals("", result.metadata)
+        assertEquals("queued", result.responseFields.toMap()["status"])
         assertNull(result.llamaDurationSeconds)
         assertNull(result.ttsDurationSeconds)
         assertNull(RingtoneItem("id", "uid", "", "", "", "", "", "").generationStatus)

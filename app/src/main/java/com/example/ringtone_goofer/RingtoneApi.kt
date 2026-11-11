@@ -31,10 +31,11 @@ data class Voice(val id: String, val name: String, val clips: List<VoiceClip>) {
     }
 }
 data class GenerationRequest(
-    val jobId: String, val caller: String, val voiceId: String, val clipId: String
+    val jobId: String, val caller: String, val voiceId: String, val clipId: String,
+    val language: String = "auto"
 ) {
     fun payload() = JSONObject().put("receiver", "viktor").put("caller", caller)
-        .put("voice_id", voiceId).put("clip_id", clipId)
+        .put("voice_id", voiceId).put("clip_id", clipId).put("language", language)
 }
 data class GenerationJob(val id: String, val statusUrl: String, val downloadUrl: String, val status: String)
 data class GenerationStatus(
@@ -53,24 +54,35 @@ data class GenerationStatus(
         if (isEmpty() && status == "queued") add("Waiting for a generation slot")
     }.joinToString("\n")
 
-    fun json() = (if (responseJson.isBlank()) JSONObject() else JSONObject(responseJson)).apply {
+    fun json(): JSONObject {
+        if (responseJson.isNotBlank()) return JSONObject(responseJson)
+        return JSONObject().apply {
         put("status", status); put("error", error ?: JSONObject.NULL)
         put("llm_status", scriptStatus); put("llama_status", llamaStatus); put("tts_status", audioStatus)
         put("llama_duration_seconds", llamaDurationSeconds ?: JSONObject.NULL)
         put("tts_duration_seconds", ttsDurationSeconds ?: JSONObject.NULL)
+        }
     }
 
-    val metadata: String get() {
-        val response = json()
-        return listOf(
-            "llm_job_id" to "LLM job", "tts_job_id" to "TTS job",
-            "receiver" to "Receiver", "caller" to "Caller",
-            "voice_clip_path" to "Reference audio", "script" to "Generated script",
-            "output_key" to "Output", "created_at" to "Created on server"
-        ).mapNotNull { (key, label) ->
-            response.optString(key).takeIf { !response.isNull(key) && it.isNotBlank() }
-                ?.let { "$label: $it" }
-        }.joinToString("\n\n")
+    /** Enumerate the response without a field allowlist; nested values become labeled rows. */
+    val responseFields: List<Pair<String, String>> get() = buildList {
+        fun append(key: String, value: Any?) {
+            when (value) {
+                null, JSONObject.NULL -> add(key to "Not set")
+                is JSONObject -> {
+                    if (value.length() == 0) add(key to "Empty")
+                    else value.keys().asSequence().sorted().forEach { child ->
+                        append(if (key.isEmpty()) child else "$key · $child", value.get(child))
+                    }
+                }
+                is org.json.JSONArray -> {
+                    if (value.length() == 0) add(key to "Empty")
+                    else for (index in 0 until value.length()) append("$key · ${index + 1}", value.get(index))
+                }
+                else -> add(key to value.toString().ifEmpty { "Empty" })
+            }
+        }
+        append("", json())
     }
 
     companion object {

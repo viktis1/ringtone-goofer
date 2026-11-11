@@ -137,6 +137,10 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
             clipId = if (keepVoice) current.clipId else ""))
     }
 
+    fun selectLanguage(language: String) {
+        saveDraft((draft.value ?: return).copy(language = language))
+    }
+
     fun selectVoice(voice: Voice, clip: VoiceClip? = null) {
         val current = draft.value ?: return
         if (!voice.isAvailableForRecipient(current.contactName)) return
@@ -225,7 +229,8 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         val clip = voice.clips.firstOrNull { it.id == draft.value?.clipId } ?: return
         if (contact.name.isBlank()) { status.value = "Give this contact a name first."; return }
         val item = RingtoneItem(UUID.randomUUID().toString(), uid, contact.lookupUri.toString(),
-            contact.name, voice.id, voice.name, clip.id, clip.name)
+            contact.name, voice.id, voice.name, clip.id, clip.name,
+            language = draft.value?.language ?: "auto")
         saving.value = true
         operation {
             library.put(item) // Commit the complete request before any network side effect.

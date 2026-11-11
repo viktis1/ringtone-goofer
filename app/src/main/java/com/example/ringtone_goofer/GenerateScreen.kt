@@ -22,6 +22,7 @@ import java.io.File
 internal class GenerateScreen(activity: MainActivity, var voiceQuery: String = "") : TabScreen(activity) {
     private lateinit var recipientButton: Button
     private lateinit var voiceButton: Button
+    private lateinit var languageButton: Button
     private lateinit var next: Button
     private data class VoiceRow(val title: String, val voice: Voice? = null)
 
@@ -36,6 +37,8 @@ internal class GenerateScreen(activity: MainActivity, var voiceQuery: String = "
             clip == null -> "Voice: ${voice.displayName}\nChoose a clip"
             else -> "✓  Voice: ${voice.displayName}\n${clip.name.substringAfterLast('/')} · Tap to change"
         }
+        languageButton.text = "Language: ${languageName(draft.language)}"
+        languageButton.isEnabled = model.loaded.value == true
         next.isEnabled = model.loaded.value == true && model.saving.value != true &&
             model.recording.value != true && draft.contactUri.isNotBlank() && clip != null
     }
@@ -62,6 +65,8 @@ internal class GenerateScreen(activity: MainActivity, var voiceQuery: String = "
         voiceButton = secondaryButton("Choose a voice") { chooseVoice() }
         body.addView(recipientButton)
         body.addView(voiceButton)
+        languageButton = secondaryButton("Language: Automatic") { chooseLanguage() }
+        body.addView(languageButton)
         next = button("Generate & set ringtone") { nextStep() }
         body.addView(next)
         refresh = { updateVoiceRefreshBanner(error); updateSummary() }
@@ -78,6 +83,53 @@ internal class GenerateScreen(activity: MainActivity, var voiceQuery: String = "
         val message = model.voiceRefreshError.value
         banner.text = message?.let { "✕  $it" }.orEmpty()
         banner.visibility = if (message == null) View.GONE else View.VISIBLE
+    }
+
+    private fun languageName(code: String): String = if (code == "auto") "Automatic (voice language)"
+        else java.util.Locale.forLanguageTag(code).getDisplayLanguage(java.util.Locale.ENGLISH)
+
+    private fun chooseLanguage() {
+        val list = ListView(this)
+        val header = column(16)
+        val search = EditText(this).apply {
+            hint = "Search languages"
+            contentDescription = "Search languages"
+            setSingleLine()
+        }
+        header.addView(search)
+        val suggestions = listOf("da", "en", "zh")
+        val codes = listOf("auto") + suggestions + java.util.Locale.getISOLanguages()
+            .filter { it !in suggestions && languageName(it).isNotBlank() }.distinct()
+            .sortedBy { languageName(it) }
+        val adapter = RowsAdapter<String> { code ->
+            text((if (code == model.draft.value?.language) "✓  " else "") + languageName(code), 17)
+                .apply { setPadding(24, 24, 24, 24) }
+        }
+        list.adapter = adapter
+        val empty = text("No languages match your search.", 14)
+        header.addView(empty)
+        val body = column()
+        body.addView(header)
+        body.addView(list, android.widget.LinearLayout.LayoutParams(-1, 0, 1f))
+        fun filter(query: String) {
+            adapter.items = codes.filter {
+                query.isBlank() || languageName(it).contains(query, ignoreCase = true) ||
+                    it.equals(query.trim(), ignoreCase = true)
+            }
+            empty.visibility = if (adapter.items.isEmpty()) View.VISIBLE else View.GONE
+        }
+        search.doOnTextChanged { value, _, _, _ -> filter(value.toString()) }
+        val dialog = AlertDialog.Builder(this).setTitle("Choose a language")
+            .setView(body).setNegativeButton("Cancel", null).create()
+        list.setOnItemClickListener { _, _, position, _ ->
+            adapter.items.getOrNull(position)?.let {
+                model.selectLanguage(it)
+                dialog.dismiss()
+            }
+        }
+        filter("")
+        dialog.show()
+        dialog.window?.setLayout(-1, (resources.displayMetrics.heightPixels * 0.8f).toInt())
     }
 
     private fun chooseVoice() {
