@@ -155,6 +155,8 @@ class RingtoneApi(
 
     suspend fun voicesJson(): JSONObject = json("/voices")
 
+    suspend fun health() = request("/health") { Unit }
+
     fun parseVoices(groups: JSONObject): List<Voice> {
         return groups.keys().asSequence().flatMap { category ->
             val people = groups.getJSONObject(category)

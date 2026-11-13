@@ -122,7 +122,7 @@ class MainActivity : AppCompatActivity() {
         }
         setContentView(root)
         showSection(section)
-        listOf(model.contactSelection, model.draft, model.voices, model.voiceRefreshError,
+        listOf(model.contactSelection, model.draft, model.voices, model.voiceRefreshError, model.refreshingVoices,
             model.contacts, model.items, model.callHistory, model.loaded, model.saving, model.recording,
             model.stoppingRecording).forEach { state ->
             state.observe(this) { currentScreen?.refresh?.invoke() }
@@ -145,6 +145,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSection(value: Int) {
+        val enteringGenerate = section != value && value == R.id.section_voices
         stopAudio()
         section = value
         getPreferences(MODE_PRIVATE).edit().putInt("section", value).apply()
@@ -155,6 +156,7 @@ class MainActivity : AppCompatActivity() {
         }
         content.removeAllViews()
         content.addView(currentScreen!!.create(), LinearLayout.LayoutParams(-1, -1))
+        if (enteringGenerate) model.retryVoiceRefresh()
     }
 
     internal fun hasPermission(permission: String) =

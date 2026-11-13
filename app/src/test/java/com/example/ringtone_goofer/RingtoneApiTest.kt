@@ -35,6 +35,22 @@ class RingtoneApiTest {
         }
     }
 
+    @Test fun healthAcceptsSuccessfulPlainTextResponse() = runBlocking {
+        respond("/health", "OK", type = "text/plain")
+        api.health()
+    }
+
+    @Test fun healthReportsOfflineServer() = runBlocking {
+        respond("/health", "<html>Origin is offline</html>", 530, "text/html")
+        try {
+            api.health()
+            fail("Expected offline error")
+        } catch (e: ApiHttpException) {
+            assertEquals(530, e.code)
+            assertEquals("Server is offline (HTTP 530).", e.message)
+        }
+    }
+
     @Test fun recipientCanChoosePublicVoicesAndOnlyTheirOwnUploads() {
         fun voice(id: String) = Voice(id, id, emptyList())
         assertTrue(voice("Public:Alex").isAvailableForRecipient("Mille"))

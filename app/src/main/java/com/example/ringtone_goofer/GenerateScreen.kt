@@ -6,6 +6,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ListView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.core.widget.doOnTextChanged
@@ -58,7 +59,7 @@ internal class GenerateScreen(activity: MainActivity, var voiceQuery: String = "
     override fun create(): View {
         val body = column(16)
         val error = voiceRefreshBanner()
-        body.addView(error)
+        body.addView(error.row)
         body.addView(text("Generate", 22))
         activity.statusHeader(body)
         recipientButton = secondaryButton("Choose / change recipient") { chooseGenerationContact() }
@@ -74,15 +75,29 @@ internal class GenerateScreen(activity: MainActivity, var voiceQuery: String = "
         return android.widget.ScrollView(this).apply { addView(body) }
     }
 
-    private fun voiceRefreshBanner() = text("", 14).apply {
-        setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorError))
-        accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+    private data class VoiceRefreshBanner(val row: LinearLayout, val message: TextView, val retry: Button)
+
+    private fun voiceRefreshBanner(): VoiceRefreshBanner {
+        val message = text("", 14).apply {
+            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorError))
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        val retry = secondaryButton("Refresh") { model.retryVoiceRefresh() }
+        val row = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            addView(message, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(retry, LinearLayout.LayoutParams(-2, -2))
+        }
+        return VoiceRefreshBanner(row, message, retry)
     }
 
-    private fun updateVoiceRefreshBanner(banner: TextView) {
+    private fun updateVoiceRefreshBanner(banner: VoiceRefreshBanner) {
         val message = model.voiceRefreshError.value
-        banner.text = message?.let { "✕  $it" }.orEmpty()
-        banner.visibility = if (message == null) View.GONE else View.VISIBLE
+        banner.message.text = message?.let { "✕  $it" }.orEmpty()
+        banner.row.visibility = if (message == null) View.GONE else View.VISIBLE
+        banner.retry.isEnabled = model.refreshingVoices.value != true
+        banner.retry.text = if (model.refreshingVoices.value == true) "Refreshing…" else "Refresh"
     }
 
     private fun languageName(code: String): String = if (code == "auto") "Automatic (voice language)"
@@ -136,7 +151,7 @@ internal class GenerateScreen(activity: MainActivity, var voiceQuery: String = "
         val list = ListView(this).apply { divider = null }
         val header = column(16)
         val error = voiceRefreshBanner()
-        header.addView(error)
+        header.addView(error.row)
         header.addView(text("Choose a Public voice or an upload matching your recipient. Tap a person to choose and preview their clips.", 14))
         val search = EditText(this).apply {
             hint = "Search voices"

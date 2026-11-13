@@ -183,13 +183,18 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
         return rows
     }
 
-    fun loadVoices() {
+    fun retryVoiceRefresh() {
+        if (voiceRefreshError.value == null) return
+        loadVoices(checkHealth = true)
+    }
+
+    fun loadVoices(checkHealth: Boolean = false) {
         val user = auth.currentUser ?: run {
             voiceRefreshError.value = "Voices couldn't be refreshed. Sign in and try again."
             return
         }
         if (voiceLoad?.isActive == true) return
-        voiceRefreshError.value = null
+        if (!checkHealth) voiceRefreshError.value = null
         refreshingVoices.value = true
         voiceLoad = viewModelScope.launch {
             val client = RingtoneApi(idToken = {
@@ -198,6 +203,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
             })
             var restoring = false
             try {
+                if (checkHealth) client.health()
                 val cached = withContext(Dispatchers.IO) { voiceCache.read(user.uid)?.let(client::parseVoices) }
                 ensureActive()
                 cached?.let { voices.value = it }
@@ -206,6 +212,7 @@ class RingtoneViewModel(application: Application) : AndroidViewModel(application
                 withContext(Dispatchers.IO) { voiceCache.write(user.uid, response) }
                 ensureActive()
                 voices.value = fresh
+                voiceRefreshError.value = null
                 if (fresh.isEmpty()) status.value = "No voices available. Upload a recording or refresh later."
                 restoring = true
                 val count = voiceRecordings.sync(user.uid, fresh, client::preview)
